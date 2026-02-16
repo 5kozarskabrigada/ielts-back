@@ -105,6 +105,71 @@ export const listExams = async (req, res) => {
   }
 };
 
+export const deleteExam = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Soft delete
+    const { data, error } = await supabase
+      .from("exams")
+      .update({ status: 'deleted', is_deleted: true }) // Assuming is_deleted column exists or using status
+      .eq("id", id)
+      .select()
+      .single();
+
+    // Fallback if is_deleted column doesn't exist, just update status
+    if (error && error.code === '42703') { // Undefined column
+       const { error: fallbackError } = await supabase
+        .from("exams")
+        .update({ status: 'deleted' })
+        .eq("id", id);
+       if (fallbackError) throw fallbackError;
+       return res.json({ message: "Exam deleted successfully (status set to deleted)" });
+    } else if (error) {
+      throw error;
+    }
+
+    res.json({ message: "Exam deleted successfully", exam: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const restoreExam = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from("exams")
+      .update({ status: 'draft', is_deleted: false })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "Exam restored successfully", exam: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const listDeletedExams = async (req, res) => {
+  try {
+    // Check if is_deleted column exists by trying to select it, or just filter by status='deleted' if that's the convention
+    // Let's assume we added is_deleted column or are using status='deleted'
+    const { data, error } = await supabase
+      .from("exams")
+      .select("*")
+      .or("is_deleted.eq.true,status.eq.deleted")
+      .order("updated_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 export const createExam = async (req, res) => {
   const { title, description, duration_minutes, modules_config, access_code, security_level, target_audience, assigned_classroom_id } = req.body;
   const createdBy = req.user.id;

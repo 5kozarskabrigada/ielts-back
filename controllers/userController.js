@@ -122,3 +122,36 @@ export const deleteUser = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+export const restoreUser = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .update({ is_deleted: false, is_active: true })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "User restored successfully", user: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const listDeletedUsers = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("is_deleted", true)
+      .order("updated_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
