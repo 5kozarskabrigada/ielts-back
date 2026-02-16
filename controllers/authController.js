@@ -2,7 +2,12 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { supabase } from "../supabaseClient.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "deniznegro-omgithastobe-verysecure";
+const JWT_SECRET = process.env.JWT_SECRET;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+
+if (!JWT_SECRET) {
+  console.warn("WARNING: JWT_SECRET is not defined in environment variables.");
+}
 
 export const login = async (req, res) => {
   const { email, password } = req.body; // 'email' field can now hold email OR username
@@ -75,7 +80,8 @@ export const forgotPassword = async (req, res) => {
     }).eq("id", user.id);
 
     // Mock sending email
-    console.log(`[EMAIL MOCK] Password reset link for ${email}: http://localhost:3000/reset-password?token=${resetToken}`);
+    const resetLink = `${FRONTEND_URL}/reset-password?token=${resetToken}`;
+    console.log(`[EMAIL MOCK] Password reset link for ${email}: ${resetLink}`);
     
     res.json({ message: "Password reset link sent to your email (check server console)" });
   } catch (err) {
