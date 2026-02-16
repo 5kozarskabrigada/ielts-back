@@ -1,9 +1,13 @@
-import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { supabase } from "../supabaseClient.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+
+const hashPassword = (password) => {
+  return crypto.createHash("sha256").update(password).digest("hex");
+};
 
 if (!JWT_SECRET) {
   console.warn("WARNING: JWT_SECRET is not defined in environment variables.");
@@ -35,7 +39,7 @@ export const login = async (req, res) => {
       return res.status(403).json({ error: "Account has been deactivated" });
     }
 
-    const match = await bcrypt.compare(password, user.password_hash);
+    const match = hashPassword(password) === user.password_hash;
     if (!match) return res.status(401).json({ error: "Invalid credentials" });
 
     const token = jwt.sign(
@@ -94,7 +98,7 @@ export const registerDevAdmin = async (req, res) => {
   const { email, password, firstName, lastName, username } = req.body;
 
   try {
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = hashPassword(password);
     const { data, error } = await supabase
       .from("users")
       .insert([

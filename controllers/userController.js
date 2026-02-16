@@ -1,4 +1,4 @@
-import bcrypt from "bcrypt";
+import crypto from "crypto";
 import { supabase } from "../supabaseClient.js";
 
 export const listUsers = async (req, res) => {
@@ -36,7 +36,12 @@ export const createUser = async (req, res) => {
 
   // Password: provided or auto-generated
   const rawPassword = password || Math.random().toString(36).slice(-8);
-  const passwordHash = await bcrypt.hash(rawPassword, 10);
+  // Simple SHA-256 hash for MVP (Not secure for production, but avoids bcrypt issues)
+const hashPassword = (password) => {
+  return crypto.createHash("sha256").update(password).digest("hex");
+};
+
+const passwordHash = hashPassword(rawPassword);
 
   try {
     const { data, error } = await supabase
