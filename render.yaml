@@ -3,7 +3,7 @@ services:
     name: ielts-backend
     env: node
     plan: free
-    buildCommand: npm install && npm rebuild bcrypt
+    buildCommand: npm install && npm uninstall bcrypt && npm install bcrypt
     startCommand: npm start
     envVars:
       - key: PORT
