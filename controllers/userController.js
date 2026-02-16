@@ -32,16 +32,17 @@ export const createUser = async (req, res) => {
 
   // Auto-generate username: firstname.lastname + random suffix for uniqueness
   const randomSuffix = Math.random().toString(36).substring(2, 6);
-  let username = `${firstName}.${lastName}`.toLowerCase().replace(/[^a-z0-9]/g, "") + "." + randomSuffix;
+  const username = `${firstName}.${lastName}`.toLowerCase().replace(/[^a-z0-9]/g, "") + "." + randomSuffix;
 
   // Password: provided or auto-generated
   const rawPassword = password || Math.random().toString(36).slice(-8);
-  // Simple SHA-256 hash for MVP (Not secure for production, but avoids bcrypt issues)
-const hashPassword = (password) => {
-  return crypto.createHash("sha256").update(password).digest("hex");
-};
 
-const passwordHash = hashPassword(rawPassword);
+  // Simple SHA-256 hash for MVP
+  const hashPassword = (password) => {
+    return crypto.createHash("sha256").update(password).digest("hex");
+  };
+
+  const passwordHash = hashPassword(rawPassword);
 
   try {
     const { data, error } = await supabase
@@ -75,7 +76,7 @@ const passwordHash = hashPassword(rawPassword);
 
 export const updateUser = async (req, res) => {
   const { id } = req.params;
-  const { firstName, lastName, email, role, isActive } = req.body;
+  const { firstName, lastName, email, role, isActive, password } = req.body;
 
   try {
     const updates = {};
@@ -84,6 +85,10 @@ export const updateUser = async (req, res) => {
     if (email !== undefined) updates.email = email || null;
     if (role) updates.role = role;
     if (typeof isActive === "boolean") updates.is_active = isActive;
+    if (password) {
+      // Simple SHA-256 hash for MVP
+      updates.password_hash = crypto.createHash("sha256").update(password).digest("hex");
+    }
 
     const { data, error } = await supabase
       .from("users")
