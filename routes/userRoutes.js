@@ -8,6 +8,7 @@ router.use(authMiddleware);
 router.use(requireRole("admin"));
 
 router.get("/", listUsers);
+router.delete("/:id/permanent", requireRole("admin"), permanentlyDeleteUser);
 router.get("/deleted", listDeletedUsers);
 router.post("/", createUser);
 router.put("/:id", updateUser);
