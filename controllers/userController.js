@@ -143,15 +143,24 @@ export const restoreUser = async (req, res) => {
 
 export const listDeletedUsers = async (req, res) => {
   try {
+    // Check if is_deleted column exists first or handle error
     const { data, error } = await supabase
       .from("users")
       .select("*")
       .eq("is_deleted", true)
       .order("updated_at", { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      // If column doesn't exist, return empty array instead of 500
+      if (error.code === '42703') { // Undefined column
+        console.warn("is_deleted column missing in users table");
+        return res.json([]);
+      }
+      throw error;
+    }
     res.json(data);
   } catch (err) {
+    console.error("List Deleted Users Error:", err);
     res.status(500).json({ error: err.message });
   }
 };

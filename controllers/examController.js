@@ -23,12 +23,13 @@ export const saveExamStructure = async (req, res) => {
 
     if (examError) throw examError;
 
+    // Map to store oldId -> newId mapping to return to frontend
+    const idMapping = {
+      sections: {},
+      questions: {}
+    };
+
     // 2. Upsert Sections
-    // Note: This assumes sections have IDs (even temp ones need to be handled, usually backend ignores or replaces temp IDs)
-    // For simplicity, we'll upsert based on ID if it's a valid UUID, or insert if it's a temp ID (client should send without ID or handle mapping)
-    // A better approach for "save entire structure" is complex. 
-    // Here we will iterate.
-    
     for (const section of sections) {
       const payload = {
         exam_id: examId,
@@ -40,19 +41,24 @@ export const saveExamStructure = async (req, res) => {
       };
 
       let sectionId = section.id;
-      
-      // If ID is temporary (starts with 'l', 'r', 'w' or 'temp'), remove it to let DB generate new one, OR update if it's real UUID
-      // This logic depends on whether we created them in DB yet. 
-      // If we want to support full sync, we might need to delete old sections and re-insert, but that breaks foreign keys.
-      // Strategy: Upsert. If ID is not UUID, insert.
-      
       const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sectionId);
       
       if (isUUID) {
-        await supabase.from("exam_sections").update(payload).eq("id", sectionId);
+        const { error: updateError } = await supabase.from("exam_sections").update(payload).eq("id", sectionId);
+        if (updateError) throw updateError;
       } else {
-        const { data: newSection } = await supabase.from("exam_sections").insert([payload]).select().single();
-        sectionId = newSection.id; // Map temp ID to new real ID for questions
+        // Insert new section
+        const { data: newSection, error: insertError } = await supabase
+          .from("exam_sections")
+          .insert([payload])
+          .select()
+          .single();
+        
+        if (insertError) throw insertError;
+        
+        // Record mapping
+        idMapping.sections[sectionId] = newSection.id;
+        sectionId = newSection.id; // Update for questions
       }
 
       // 3. Upsert Questions for this section
@@ -62,24 +68,37 @@ export const saveExamStructure = async (req, res) => {
         const qPayload = {
           exam_id: examId,
           section_id: sectionId, // Use the real (possibly new) section ID
-          question_text: q.text,
-          question_type: q.type,
-          correct_answer: q.answer,
-          points: 1,
-          question_number: 0 // Logic to set this based on index?
+          question_text: q.question_text || q.text, // Handle potential naming mismatch
+          question_type: q.question_type || q.type,
+          correct_answer: q.correct_answer || q.answer,
+          points: q.points || 1,
+          question_number: q.question_number || 0,
+          options: q.options || [] // Ensure options are saved if applicable
         };
 
-        const isQUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q.id);
+        const qId = q.id;
+        const isQUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(qId);
 
         if (isQUUID) {
-          await supabase.from("questions").update(qPayload).eq("id", q.id);
+          const { error: qUpdateError } = await supabase.from("questions").update(qPayload).eq("id", qId);
+          if (qUpdateError) throw qUpdateError;
         } else {
-          await supabase.from("questions").insert([qPayload]);
+          const { data: newQuestion, error: qInsertError } = await supabase
+            .from("questions")
+            .insert([qPayload])
+            .select()
+            .single();
+            
+          if (qInsertError) throw qInsertError;
+          idMapping.questions[qId] = newQuestion.id;
         }
       }
     }
 
-    res.json({ message: "Exam structure saved successfully" });
+    res.json({ 
+      message: "Exam structure saved successfully", 
+      idMapping 
+    });
   } catch (err) {
     console.error("Save Structure Error:", err);
     res.status(500).json({ error: err.message });
@@ -155,17 +174,33 @@ export const restoreExam = async (req, res) => {
 
 export const listDeletedExams = async (req, res) => {
   try {
-    // Check if is_deleted column exists by trying to select it, or just filter by status='deleted' if that's the convention
-    // Let's assume we added is_deleted column or are using status='deleted'
+    // Try to fetch deleted exams
+    // We check for is_deleted = true OR status = 'deleted'
+    // Note: 'or' syntax in supabase-js is .or('col1.eq.val1,col2.eq.val2')
+    
     const { data, error } = await supabase
       .from("exams")
       .select("*")
       .or("is_deleted.eq.true,status.eq.deleted")
       .order("updated_at", { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+       if (error.code === '42703') { // Undefined column
+         // Fallback: try just status if is_deleted is missing
+         const { data: fallbackData, error: fallbackError } = await supabase
+          .from("exams")
+          .select("*")
+          .eq("status", "deleted")
+          .order("created_at", { ascending: false });
+          
+         if (fallbackError) throw fallbackError;
+         return res.json(fallbackData);
+       }
+       throw error;
+    }
     res.json(data);
   } catch (err) {
+    console.error("List Deleted Exams Error:", err);
     res.status(500).json({ error: err.message });
   }
 };

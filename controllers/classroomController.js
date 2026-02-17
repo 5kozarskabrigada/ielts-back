@@ -17,16 +17,27 @@ export const listClassrooms = async (req, res) => {
 // Create a new classroom
 export const createClassroom = async (req, res) => {
   const { name, description } = req.body;
-  const createdBy = req.user.id;
+  const createdBy = req.user?.id;
+
+  if (!name) {
+    return res.status(400).json({ error: "Classroom name is required" });
+  }
 
   try {
     const { data, error } = await supabase
       .from("classrooms")
-      .insert([{ name, description, created_by: createdBy }])
+      .insert([{ 
+        name, 
+        description, 
+        created_by: createdBy // Can be null if not enforced, but usually should be valid
+      }])
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error("Create Classroom DB Error:", error);
+      throw error;
+    }
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
