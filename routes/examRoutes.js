@@ -14,6 +14,7 @@ router.post("/:id/submit", submitExam);
 router.post("/:id/violations", logViolation);
 
 // Admin routes
+router.delete("/:id/permanent", requireRole("admin"), permanentlyDeleteExam);
 router.get("/deleted/all", requireRole("admin"), listDeletedExams); // Must be before /:id
 router.post("/", requireRole("admin"), createExam);
 router.post("/:id/sections", requireRole("admin"), createSection);

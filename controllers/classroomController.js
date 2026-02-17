@@ -24,12 +24,13 @@ export const createClassroom = async (req, res) => {
   }
 
   try {
+    // Description is optional, so we can pass null or empty string
     const { data, error } = await supabase
       .from("classrooms")
       .insert([{ 
         name, 
-        description, 
-        created_by: createdBy // Can be null if not enforced, but usually should be valid
+        description: description || null, 
+        created_by: createdBy
       }])
       .select()
       .single();

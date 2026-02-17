@@ -107,19 +107,40 @@ export const saveExamStructure = async (req, res) => {
 
 // ... export existing functions
 export const listExams = async (req, res) => {
-  const { role, id: userId } = req.user;
-
   try {
-    let query = supabase.from("exams").select("id, title, description, duration_minutes, status, created_at, access_code, security_level, target_audience");
+    const userRole = req.user?.role;
+    
+    let query = supabase
+      .from("exams")
+      .select("*")
+      .neq("is_deleted", true) // Always exclude soft-deleted exams from main list
+      .neq("status", "deleted"); // Double check status too
 
-    if (role === "student") {
+    // If student, only show active exams
+    if (userRole === "student") {
       query = query.eq("status", "active");
     }
+    // If admin, show all (draft, active, archived) EXCEPT deleted (handled above)
 
     const { data, error } = await query.order("created_at", { ascending: false });
-    if (error) throw error;
+
+    if (error) {
+       // If is_deleted column missing, try gracefully
+       if (error.code === '42703') {
+         const { data: fallback, error: fbError } = await supabase
+           .from("exams")
+           .select("*")
+           .neq("status", "deleted")
+           .order("created_at", { ascending: false });
+           
+         if (fbError) throw fbError;
+         return res.json(fallback);
+       }
+       throw error;
+    }
     res.json(data);
   } catch (err) {
+    console.error("List Exams Error:", err);
     res.status(500).json({ error: err.message });
   }
 };
