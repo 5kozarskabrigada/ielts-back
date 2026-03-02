@@ -1,5 +1,5 @@
 import express from "express";
-import { listExams, createExam, getExam, addQuestions, submitExam, updateExamStatus, getExamLogs, createSection, saveExamStructure, deleteExam, restoreExam, listDeletedExams, permanentlyDeleteExam, regenerateExamCode, deleteQuestion, restoreQuestion, listDeletedQuestions, permanentlyDeleteQuestion } from "../controllers/examController.js";
+import { listExams, createExam, getExam, addQuestions, submitExam, updateExamStatus, getExamLogs, createSection, saveExamStructure, deleteExam, restoreExam, listDeletedExams, permanentlyDeleteExam, regenerateExamCode, deleteQuestion, restoreQuestion, listDeletedQuestions, permanentlyDeleteQuestion, getExamStats, updateAccessCode } from "../controllers/examController.js";
 import { logViolation } from "../controllers/monitoringController.js";
 import { authMiddleware, requireRole } from "../middleware/authMiddleware.js";
 
@@ -21,8 +21,10 @@ router.post("/:id/sections", requireRole("admin"), createSection);
 router.post("/:id/questions", requireRole("admin"), addQuestions);
 router.put("/:id/status", requireRole("admin"), updateExamStatus);
 router.get("/:id/logs", requireRole("admin"), getExamLogs);
+router.get("/:id/stats", requireRole("admin"), getExamStats);
 router.put("/:id/structure", requireRole("admin"), saveExamStructure);
 router.put("/:id/regenerate-code", requireRole("admin"), regenerateExamCode);
+router.put("/:id/access-code", requireRole("admin"), updateAccessCode);
 router.delete("/:id/permanent", requireRole("admin"), permanentlyDeleteExam);
 router.delete("/:id", requireRole("admin"), deleteExam);
 router.put("/:id/restore", requireRole("admin"), restoreExam);

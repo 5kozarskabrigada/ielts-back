@@ -688,3 +688,81 @@ export const submitExam = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// Get exam statistics (participants count)
+export const getExamStats = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Get count of students currently in the exam (in_progress)
+    const { count: activeCount, error: activeError } = await supabase
+      .from("exam_submissions")
+      .select("*", { count: "exact", head: true })
+      .eq("exam_id", id)
+      .eq("status", "in_progress");
+
+    if (activeError) throw activeError;
+
+    // Get total count of all students who have ever joined
+    const { count: totalCount, error: totalError } = await supabase
+      .from("exam_submissions")
+      .select("*", { count: "exact", head: true })
+      .eq("exam_id", id);
+
+    if (totalError) throw totalError;
+
+    // Get count of completed submissions
+    const { count: completedCount, error: completedError } = await supabase
+      .from("exam_submissions")
+      .select("*", { count: "exact", head: true })
+      .eq("exam_id", id)
+      .in("status", ["submitted", "auto_submitted"]);
+
+    if (completedError) throw completedError;
+
+    res.json({
+      active_participants: activeCount || 0,
+      total_participants: totalCount || 0,
+      completed_count: completedCount || 0
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Update access code manually
+export const updateAccessCode = async (req, res) => {
+  const { id } = req.params;
+  const { access_code } = req.body;
+
+  if (!access_code || access_code.length < 4 || access_code.length > 12) {
+    return res.status(400).json({ error: "Access code must be between 4 and 12 characters" });
+  }
+
+  try {
+    // Check if access code is already in use by another exam
+    const { data: existing, error: checkError } = await supabase
+      .from("exams")
+      .select("id")
+      .eq("access_code", access_code.toUpperCase())
+      .neq("id", id)
+      .maybeSingle();
+
+    if (checkError) throw checkError;
+    if (existing) {
+      return res.status(400).json({ error: "This access code is already in use by another exam" });
+    }
+
+    const { data, error } = await supabase
+      .from("exams")
+      .update({ access_code: access_code.toUpperCase() })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "Access code updated", exam: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
