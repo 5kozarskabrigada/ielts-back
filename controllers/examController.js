@@ -414,7 +414,22 @@ export const updateExamStatus = async (req, res) => {
 
   try {
     const updates = {};
-    if (status) updates.status = status;
+    if (status) {
+      updates.status = status;
+      // Auto-generate access code when activating if not exists
+      if (status === 'active') {
+        // First check if exam already has an access code
+        const { data: existing } = await supabase
+          .from("exams")
+          .select("access_code")
+          .eq("id", id)
+          .single();
+        
+        if (!existing?.access_code) {
+          updates.access_code = Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+      }
+    }
     if (security_level) updates.security_level = security_level;
     if (target_audience) updates.target_audience = target_audience;
     if (assigned_classroom_id !== undefined) updates.assigned_classroom_id = assigned_classroom_id;
