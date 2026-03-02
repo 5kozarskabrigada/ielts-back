@@ -5,7 +5,8 @@ export const listClassrooms = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("classrooms")
-      .select("*, students:classroom_students(count)");
+      .select("*, students:classroom_students(count)")
+      .order("created_at", { ascending: false });
 
     if (error) throw error;
     res.json(data);
@@ -17,21 +18,26 @@ export const listClassrooms = async (req, res) => {
 // Create a new classroom
 export const createClassroom = async (req, res) => {
   const { name, description } = req.body;
-  const createdBy = req.user?.id;
+  const createdBy = req.user?.id || null;
 
   if (!name) {
     return res.status(400).json({ error: "Classroom name is required" });
   }
 
   try {
-    // Description is optional, so we can pass null or empty string
+    const insertData = { 
+      name, 
+      description: description || null
+    };
+    
+    // Only add created_by if we have a valid user ID
+    if (createdBy) {
+      insertData.created_by = createdBy;
+    }
+
     const { data, error } = await supabase
       .from("classrooms")
-      .insert([{ 
-        name, 
-        description: description || null, 
-        created_by: createdBy
-      }])
+      .insert([insertData])
       .select()
       .single();
 
@@ -41,6 +47,7 @@ export const createClassroom = async (req, res) => {
     }
     res.status(201).json(data);
   } catch (err) {
+    console.error("Create Classroom Error:", err);
     res.status(500).json({ error: err.message });
   }
 };
