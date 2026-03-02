@@ -164,3 +164,20 @@ export const listDeletedUsers = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+export const permanentlyDeleteUser = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Permanently delete user from database
+    const { error } = await supabase
+      .from("users")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+    res.json({ message: "User permanently deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
