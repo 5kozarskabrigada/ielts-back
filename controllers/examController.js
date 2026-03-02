@@ -5,7 +5,7 @@ import { supabase } from "../supabaseClient.js";
 
 export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
-  const { exam, sections, questions } = req.body;
+  const { exam, sections, questions, deletedQuestionIds } = req.body;
 
   try {
     // 1. Update Exam Metadata
@@ -22,6 +22,18 @@ export const saveExamStructure = async (req, res) => {
       .eq("id", examId);
 
     if (examError) throw examError;
+
+    // 2. Soft delete any questions that were removed
+    if (deletedQuestionIds && deletedQuestionIds.length > 0) {
+      const { error: deleteError } = await supabase
+        .from("questions")
+        .update({ is_deleted: true })
+        .in("id", deletedQuestionIds);
+      
+      if (deleteError && deleteError.code !== '42703') { // Ignore if column doesn't exist
+        console.warn("Failed to soft delete questions:", deleteError);
+      }
+    }
 
     // Map to store oldId -> newId mapping to return to frontend
     const idMapping = {
@@ -179,15 +191,150 @@ export const restoreExam = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Generate a new access code when restoring
+    const newAccessCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    
     const { data, error } = await supabase
       .from("exams")
-      .update({ status: 'draft', is_deleted: false })
+      .update({ status: 'draft', is_deleted: false, access_code: newAccessCode })
       .eq("id", id)
       .select()
       .single();
 
     if (error) throw error;
     res.json({ message: "Exam restored successfully", exam: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const permanentlyDeleteExam = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // First delete all related questions
+    await supabase.from("questions").delete().eq("exam_id", id);
+    
+    // Delete all related sections
+    await supabase.from("exam_sections").delete().eq("exam_id", id);
+    
+    // Delete all submissions and answers
+    const { data: submissions } = await supabase
+      .from("exam_submissions")
+      .select("id")
+      .eq("exam_id", id);
+    
+    if (submissions?.length) {
+      const submissionIds = submissions.map(s => s.id);
+      await supabase.from("answers").delete().in("submission_id", submissionIds);
+      await supabase.from("exam_submissions").delete().eq("exam_id", id);
+    }
+    
+    // Finally delete the exam
+    const { error } = await supabase
+      .from("exams")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+    res.json({ message: "Exam permanently deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const regenerateExamCode = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const newAccessCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    
+    const { data, error } = await supabase
+      .from("exams")
+      .update({ access_code: newAccessCode })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "Exam code regenerated", exam: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Question soft delete
+export const deleteQuestion = async (req, res) => {
+  const { questionId } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from("questions")
+      .update({ is_deleted: true })
+      .eq("id", questionId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "Question deleted successfully", question: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const restoreQuestion = async (req, res) => {
+  const { questionId } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from("questions")
+      .update({ is_deleted: false })
+      .eq("id", questionId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ message: "Question restored successfully", question: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const listDeletedQuestions = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("questions")
+      .select("*, exam:exam_id(title)")
+      .eq("is_deleted", true)
+      .order("updated_at", { ascending: false });
+
+    if (error) {
+      if (error.code === '42703') { // is_deleted column missing
+        return res.json([]);
+      }
+      throw error;
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const permanentlyDeleteQuestion = async (req, res) => {
+  const { questionId } = req.params;
+
+  try {
+    // Delete related answers first
+    await supabase.from("answers").delete().eq("question_id", questionId);
+    
+    // Delete the question
+    const { error } = await supabase
+      .from("questions")
+      .delete()
+      .eq("id", questionId);
+
+    if (error) throw error;
+    res.json({ message: "Question permanently deleted" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -330,15 +477,36 @@ export const getExam = async (req, res) => {
       .eq("exam_id", id)
       .order("section_order", { ascending: true });
 
-    // Fetch questions
+    // Fetch questions (exclude deleted)
     const { data: questions, error: questionsError } = await supabase
       .from("questions")
       .select("*")
       .eq("exam_id", id)
+      .neq("is_deleted", true)
       .order("module_type")
       .order("question_number");
 
-    if (questionsError) throw questionsError;
+    if (questionsError) {
+      // If is_deleted column missing, try without it
+      if (questionsError.code === '42703') {
+        const { data: fallbackQuestions } = await supabase
+          .from("questions")
+          .select("*")
+          .eq("exam_id", id)
+          .order("module_type")
+          .order("question_number");
+        
+        const sanitizedFallback = role === "student"
+          ? fallbackQuestions?.map(q => {
+              const { correct_answer, ...rest } = q;
+              return rest;
+            })
+          : fallbackQuestions;
+        
+        return res.json({ ...exam, sections, questions: sanitizedFallback || [] });
+      }
+      throw questionsError;
+    }
 
     // Remove correct answers if student
     const sanitizedQuestions = role === "student"
