@@ -1,5 +1,5 @@
 import express from "express";
-import { listClassrooms, createClassroom, getClassroom, addStudentToClassroom, removeStudentFromClassroom } from "../controllers/classroomController.js";
+import { listClassrooms, createClassroom, getClassroom, updateClassroom, deleteClassroom, addStudentToClassroom, removeStudentFromClassroom } from "../controllers/classroomController.js";
 import { authMiddleware, requireRole } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
@@ -11,6 +11,8 @@ router.use(requireRole("admin"));
 router.get("/", listClassrooms);
 router.post("/", createClassroom);
 router.get("/:id", getClassroom);
+router.put("/:id", updateClassroom);
+router.delete("/:id", deleteClassroom);
 router.post("/:id/students", addStudentToClassroom);
 router.delete("/:id/students/:studentId", removeStudentFromClassroom);
 
