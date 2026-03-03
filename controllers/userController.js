@@ -30,9 +30,9 @@ export const createUser = async (req, res) => {
     return res.status(400).json({ error: "First Name and Last Name are required" });
   }
 
-  // Auto-generate username: firstname.lastname + random suffix for uniqueness
-  const randomSuffix = Math.random().toString(36).substring(2, 6);
-  const username = `${firstName}.${lastName}`.toLowerCase().replace(/[^a-z0-9]/g, "") + "." + randomSuffix;
+  // Auto-generate username: firstname.lastname + 4 random digits for uniqueness
+  const randomDigits = Math.floor(1000 + Math.random() * 9000); // 4 digit number (1000-9999)
+  const username = `${firstName.toLowerCase()}.${lastName.toLowerCase()}${randomDigits}`.replace(/[^a-z0-9.]/g, "");
 
   // Password: provided or auto-generated
   const rawPassword = password || Math.random().toString(36).slice(-8);
