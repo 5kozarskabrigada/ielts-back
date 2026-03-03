@@ -119,3 +119,53 @@ export const getClassroom = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+// Update a classroom
+export const updateClassroom = async (req, res) => {
+  const { id } = req.params;
+  const { name, description } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ error: "Classroom name is required" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("classrooms")
+      .update({ name, description: description || null, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Delete a classroom
+export const deleteClassroom = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // First delete all student associations
+    const { error: studentError } = await supabase
+      .from("classroom_students")
+      .delete()
+      .eq("classroom_id", id);
+
+    if (studentError) throw studentError;
+
+    // Then delete the classroom
+    const { error } = await supabase
+      .from("classrooms")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+    res.json({ message: "Classroom deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
