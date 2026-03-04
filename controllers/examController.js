@@ -77,15 +77,28 @@ export const saveExamStructure = async (req, res) => {
       const sectionQuestions = questions.filter(q => q.section_id === section.id);
       
       for (const q of sectionQuestions) {
+        // Extract standard DB columns
+        const standardFields = ['id', 'section_id', 'question_text', 'text', 'question_type', 'type',
+                                'correct_answer', 'answer', 'points', 'question_number', 'exam_id', 
+                                'module_type', 'created_at', 'is_deleted', 'difficulty_level'];
+        
+        // All other fields (options, headings, endings, match options, etc.) go into question_data
+        const questionData = {};
+        for (const [key, value] of Object.entries(q)) {
+          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== '') {
+            questionData[key] = value;
+          }
+        }
+
         const qPayload = {
           exam_id: examId,
           section_id: sectionId, // Use the real (possibly new) section ID
-          question_text: q.question_text || q.text, // Handle potential naming mismatch
+          question_text: q.question_text || q.text || '', // Handle potential naming mismatch
           question_type: q.question_type || q.type,
           correct_answer: q.correct_answer || q.answer,
           points: q.points || 1,
           question_number: q.question_number || 0,
-          options: q.options || [] // Ensure options are saved if applicable
+          question_data: Object.keys(questionData).length > 0 ? questionData : null
         };
 
         const qId = q.id;
@@ -511,25 +524,38 @@ export const getExam = async (req, res) => {
           .order("module_type")
           .order("question_number");
         
+        // Merge question_data fields into each question object
+        const mergedFallback = fallbackQuestions?.map(q => {
+          const { question_data, ...rest } = q;
+          return { ...rest, ...(question_data || {}) };
+        }) || [];
+        
         const sanitizedFallback = role === "student"
-          ? fallbackQuestions?.map(q => {
+          ? mergedFallback.map(q => {
               const { correct_answer, ...rest } = q;
               return rest;
             })
-          : fallbackQuestions;
+          : mergedFallback;
         
         return res.json({ ...exam, sections, questions: sanitizedFallback || [] });
       }
       throw questionsError;
     }
 
+    // Merge question_data fields into each question object for frontend use
+    const mergedQuestions = questions?.map(q => {
+      const { question_data, ...rest } = q;
+      // Spread question_data fields into the question object
+      return { ...rest, ...(question_data || {}) };
+    }) || [];
+
     // Remove correct answers if student
     const sanitizedQuestions = role === "student"
-      ? questions.map(q => {
+      ? mergedQuestions.map(q => {
           const { correct_answer, ...rest } = q;
           return rest;
         })
-      : questions;
+      : mergedQuestions;
 
     res.json({ ...exam, sections, questions: sanitizedQuestions });
   } catch (err) {
