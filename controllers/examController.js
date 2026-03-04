@@ -5,7 +5,7 @@ import { supabase } from "../supabaseClient.js";
 
 export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
-  const { exam, sections, questions, deletedQuestionIds } = req.body;
+  const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
   try {
     // 1. Update Exam Metadata
@@ -17,7 +17,8 @@ export const saveExamStructure = async (req, res) => {
         status: exam.status,
         modules_config: exam.modules_config,
         code: exam.code,
-        type: exam.type
+        type: exam.type,
+        listening_config: exam.listening_config || null
       })
       .eq("id", examId);
 
@@ -38,7 +39,8 @@ export const saveExamStructure = async (req, res) => {
     // Map to store oldId -> newId mapping to return to frontend
     const idMapping = {
       sections: {},
-      questions: {}
+      questions: {},
+      groups: {}
     };
 
     // 2. Upsert Sections
@@ -50,7 +52,9 @@ export const saveExamStructure = async (req, res) => {
         title: section.title,
         content: section.content,
         audio_url: section.audio_url,
-        task_config: section.task_config || null // For writing sections
+        task_config: section.task_config || null, // For writing sections
+        audio_start_time: section.audio_start_time || 0,
+        section_description: section.section_description || null
       };
 
       let sectionId = section.id;
@@ -118,6 +122,67 @@ export const saveExamStructure = async (req, res) => {
           if (qInsertError) throw qInsertError;
           idMapping.questions[qId] = newQuestion.id;
         }
+      }
+
+      // 4. Handle Question Groups for listening sections
+      if (section.module_type === 'listening' && questionGroups) {
+        const sectionGroups = questionGroups.filter(g => g.section_id === section.id);
+        
+        for (const group of sectionGroups) {
+          const groupPayload = {
+            section_id: sectionId,
+            group_order: group.group_order || 1,
+            question_range_start: group.question_range_start,
+            question_range_end: group.question_range_end,
+            question_type: group.question_type,
+            instruction_text: group.instruction_text || null,
+            max_words: group.max_words || null,
+            max_numbers: group.max_numbers || null,
+            answer_format: group.answer_format || 'words_and_numbers',
+            has_example: group.has_example || false,
+            example_data: group.example_data || null,
+            audio_start_time: group.audio_start_time || null,
+            shared_options: group.shared_options || null,
+            image_url: group.image_url || null,
+            image_description: group.image_description || null,
+            layout_type: group.layout_type || null,
+            points_per_question: group.points_per_question || 1,
+            case_sensitive: group.case_sensitive || false,
+            spelling_tolerance: group.spelling_tolerance !== false
+          };
+
+          const groupId = group.id;
+          const isGroupUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(groupId);
+
+          if (isGroupUUID) {
+            const { error: gUpdateError } = await supabase
+              .from("listening_question_groups")
+              .update(groupPayload)
+              .eq("id", groupId);
+            if (gUpdateError && gUpdateError.code !== '42P01') throw gUpdateError;
+          } else {
+            const { data: newGroup, error: gInsertError } = await supabase
+              .from("listening_question_groups")
+              .insert([groupPayload])
+              .select()
+              .single();
+            
+            if (gInsertError && gInsertError.code !== '42P01') throw gInsertError;
+            if (newGroup) idMapping.groups[groupId] = newGroup.id;
+          }
+        }
+      }
+    }
+
+    // 5. Delete removed question groups
+    if (deletedGroupIds && deletedGroupIds.length > 0) {
+      const { error: deleteGroupError } = await supabase
+        .from("listening_question_groups")
+        .delete()
+        .in("id", deletedGroupIds);
+      
+      if (deleteGroupError && deleteGroupError.code !== '42P01') {
+        console.warn("Failed to delete question groups:", deleteGroupError);
       }
     }
 
@@ -537,8 +602,22 @@ export const getExam = async (req, res) => {
               return rest;
             })
           : mergedFallback;
+
+        // Fetch question groups for listening sections
+        let questionGroups = [];
+        const listeningSectionIds = sections?.filter(s => s.module_type === 'listening').map(s => s.id) || [];
         
-        return res.json({ ...exam, sections, questions: sanitizedFallback || [] });
+        if (listeningSectionIds.length > 0) {
+          const { data: groups } = await supabase
+            .from("listening_question_groups")
+            .select("*")
+            .in("section_id", listeningSectionIds)
+            .order("group_order", { ascending: true });
+          
+          questionGroups = groups || [];
+        }
+        
+        return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups });
       }
       throw questionsError;
     }
@@ -558,7 +637,23 @@ export const getExam = async (req, res) => {
         })
       : mergedQuestions;
 
-    res.json({ ...exam, sections, questions: sanitizedQuestions });
+    // Fetch question groups for listening sections
+    let questionGroups = [];
+    const listeningSectionIds = sections?.filter(s => s.module_type === 'listening').map(s => s.id) || [];
+    
+    if (listeningSectionIds.length > 0) {
+      const { data: groups, error: groupsError } = await supabase
+        .from("listening_question_groups")
+        .select("*")
+        .in("section_id", listeningSectionIds)
+        .order("group_order", { ascending: true });
+      
+      if (!groupsError) {
+        questionGroups = groups || [];
+      }
+    }
+
+    res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
