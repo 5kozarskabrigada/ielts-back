@@ -7,8 +7,20 @@ export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
-  console.log(`[SAVE] Starting save for exam ${examId}`);
-  console.log(`[SAVE] Sections: ${sections?.length}, Questions: ${questions?.length}, Groups: ${questionGroups?.length}`);
+  console.log(`\n========== SAVE START ==========`);
+  console.log(`[SAVE] Exam ID: ${examId}`);
+  console.log(`[SAVE] Sections received: ${sections?.length || 0}`);
+  console.log(`[SAVE] Questions received: ${questions?.length || 0}`);
+  console.log(`[SAVE] Question Groups received: ${questionGroups?.length || 0}`);
+  
+  if (questionGroups?.length > 0) {
+    console.log(`[SAVE] Groups detail:`, JSON.stringify(questionGroups.map(g => ({
+      id: g.id,
+      section_id: g.section_id,
+      type: g.question_type,
+      range: `${g.question_range_start}-${g.question_range_end}`
+    })), null, 2));
+  }
 
   const warnings = [];
   const idMapping = { sections: {}, questions: {}, groups: {} };
@@ -44,16 +56,18 @@ export const saveExamStructure = async (req, res) => {
       if (deleteErr) warnings.push(`Soft delete: ${deleteErr.message}`);
     }
 
-    // 3. Upsert Sections
+    // 3. Upsert Sections and their Questions/Groups
     for (const section of sections) {
+      console.log(`\n[SAVE] Processing section: ${section.id} (${section.module_type})`);
+      
       const sectionPayload = {
         exam_id: examId,
         module_type: section.module_type,
         section_order: section.section_order,
         title: section.title,
         content: section.content,
-        audio_url: section.audio_url,
-        task_config: section.task_config || null
+        audio_url: section.audio_url
+        // task_config will be set separately for listening sections
       };
 
       let sectionId = section.id;
@@ -68,6 +82,8 @@ export const saveExamStructure = async (req, res) => {
         if (error) {
           console.error(`[SAVE] Section update error:`, error);
           warnings.push(`Section ${section.title}: ${error.message}`);
+        } else {
+          console.log(`[SAVE] Section updated: ${sectionId}`);
         }
       } else {
         // Insert new section
@@ -83,18 +99,18 @@ export const saveExamStructure = async (req, res) => {
         }
         if (newSection) {
           idMapping.sections[sectionId] = newSection.id;
+          console.log(`[SAVE] Section created: ${sectionId} -> ${newSection.id}`);
           sectionId = newSection.id;
-          console.log(`[SAVE] New section created: ${sectionId}`);
         }
       }
 
-      // 4. Upsert Questions for this section
+      // 4. Save Questions for this section
       const sectionQuestions = questions.filter(q => q.section_id === section.id);
-      console.log(`[SAVE] Processing ${sectionQuestions.length} questions for section ${section.id}`);
+      console.log(`[SAVE] Section ${section.id} has ${sectionQuestions.length} questions`);
       
       for (const q of sectionQuestions) {
         // Pack all extra fields into question_data
-        const { id, section_id, question_text, question_type, correct_answer, points, question_number, ...extraFields } = q;
+        const { id, section_id, question_text, question_type, correct_answer, points, question_number, exam_id, created_at, is_deleted, ...extraFields } = q;
         
         const qPayload = {
           exam_id: examId,
@@ -130,32 +146,70 @@ export const saveExamStructure = async (req, res) => {
           }
           if (newQ) {
             idMapping.questions[q.id] = newQ.id;
-            console.log(`[SAVE] New question created: ${newQ.id}`);
+            console.log(`[SAVE] Question created: ${q.id} -> ${newQ.id}`);
           }
         }
       }
 
-      // 5. Handle Question Groups (store in task_config as fallback)
+      // 5. Handle Question Groups for listening sections
       if (section.module_type === 'listening' && questionGroups) {
+        // Find groups that belong to this section (match by original section ID)
         const sectionGroups = questionGroups.filter(g => g.section_id === section.id);
+        console.log(`[SAVE] Section ${section.id} has ${sectionGroups.length} question groups`);
+        
         if (sectionGroups.length > 0) {
-          // Store groups in section's task_config
+          // Store groups in section's task_config with UPDATED section_id
           const groupsConfig = {
             question_groups: sectionGroups.map(g => ({
-              ...g,
-              section_id: sectionId
+              id: g.id,
+              section_id: sectionId, // Use the real (possibly new) section ID
+              group_order: g.group_order || 1,
+              question_type: g.question_type,
+              question_range_start: g.question_range_start,
+              question_range_end: g.question_range_end,
+              instruction_text: g.instruction_text || null,
+              max_words: g.max_words || null,
+              max_numbers: g.max_numbers || null,
+              answer_format: g.answer_format || 'words_and_numbers',
+              has_example: g.has_example || false,
+              example_data: g.example_data || null,
+              audio_start_time: g.audio_start_time || null,
+              shared_options: g.shared_options || null,
+              image_url: g.image_url || null,
+              image_description: g.image_description || null,
+              layout_type: g.layout_type || null,
+              points_per_question: g.points_per_question || 1,
+              case_sensitive: g.case_sensitive || false,
+              spelling_tolerance: g.spelling_tolerance !== false
             }))
           };
-          await supabase
+          
+          console.log(`[SAVE] Saving groups to task_config for section ${sectionId}:`, JSON.stringify(groupsConfig.question_groups.map(g => ({
+            id: g.id,
+            section_id: g.section_id,
+            type: g.question_type,
+            range: `${g.question_range_start}-${g.question_range_end}`
+          }))));
+          
+          const { error: taskConfigError } = await supabase
             .from("exam_sections")
             .update({ task_config: JSON.stringify(groupsConfig) })
             .eq("id", sectionId);
-          console.log(`[SAVE] Saved ${sectionGroups.length} question groups to section task_config`);
+            
+          if (taskConfigError) {
+            console.error(`[SAVE] Failed to save groups to task_config:`, taskConfigError);
+            warnings.push(`Groups for ${section.title}: ${taskConfigError.message}`);
+          } else {
+            console.log(`[SAVE] Groups saved to task_config for section ${sectionId}`);
+          }
         }
       }
     }
 
-    console.log(`[SAVE] Complete. Warnings: ${warnings.length}`);
+    console.log(`\n========== SAVE COMPLETE ==========`);
+    console.log(`[SAVE] ID Mappings:`, JSON.stringify(idMapping));
+    console.log(`[SAVE] Warnings: ${warnings.length}`);
+    if (warnings.length > 0) console.log(`[SAVE] Warning details:`, warnings);
     
     res.json({ 
       message: "Exam structure saved successfully", 
@@ -519,6 +573,8 @@ export const getExam = async (req, res) => {
   const { id } = req.params;
   const { role } = req.user;
 
+  console.log(`\n========== GET EXAM ${id} ==========`);
+
   try {
     // Get exam details
     const { data: exam, error: examError } = await supabase
@@ -542,6 +598,8 @@ export const getExam = async (req, res) => {
       .select("*")
       .eq("exam_id", id)
       .order("section_order", { ascending: true });
+
+    console.log(`[GET] Sections loaded: ${sections?.length || 0}`);
 
     // Fetch questions (exclude deleted)
     const { data: questions, error: questionsError } = await supabase
@@ -568,6 +626,8 @@ export const getExam = async (req, res) => {
           return { ...rest, ...(question_data || {}) };
         }) || [];
         
+        console.log(`[GET] Questions loaded (fallback): ${mergedFallback.length}`);
+        
         const sanitizedFallback = role === "student"
           ? mergedFallback.map(q => {
               const { correct_answer, ...rest } = q;
@@ -588,21 +648,38 @@ export const getExam = async (req, res) => {
             .in("section_id", listeningSectionIds)
             .order("group_order", { ascending: true });
           
+          console.log(`[GET] Groups from table: ${groups?.length || 0}, error: ${groupsError?.message || 'none'}`);
+          
           if (!groupsError && groups?.length > 0) {
             questionGroups = groups;
           } else {
             // Fallback: read from section's task_config
+            console.log(`[GET] Falling back to task_config for groups`);
             for (const sec of listeningSections) {
+              console.log(`[GET] Section ${sec.id} task_config:`, sec.task_config ? 'present' : 'null');
               if (sec.task_config) {
                 try {
                   const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
                   if (config.question_groups) {
+                    console.log(`[GET] Found ${config.question_groups.length} groups in section ${sec.id}`);
                     questionGroups.push(...config.question_groups);
                   }
-                } catch (e) { /* ignore parse errors */ }
+                } catch (e) { 
+                  console.error(`[GET] Failed to parse task_config for section ${sec.id}:`, e.message);
+                }
               }
             }
           }
+        }
+        
+        console.log(`[GET] Total question groups: ${questionGroups.length}`);
+        if (questionGroups.length > 0) {
+          console.log(`[GET] Groups:`, questionGroups.map(g => ({
+            id: g.id,
+            section_id: g.section_id,
+            type: g.question_type,
+            range: `${g.question_range_start}-${g.question_range_end}`
+          })));
         }
         
         return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups });
@@ -616,6 +693,8 @@ export const getExam = async (req, res) => {
       // Spread question_data fields into the question object
       return { ...rest, ...(question_data || {}) };
     }) || [];
+
+    console.log(`[GET] Questions loaded: ${mergedQuestions.length}`);
 
     // Remove correct answers if student
     const sanitizedQuestions = role === "student"
@@ -638,25 +717,36 @@ export const getExam = async (req, res) => {
         .in("section_id", listeningSectionIds)
         .order("group_order", { ascending: true });
       
+      console.log(`[GET] Groups from table: ${groups?.length || 0}, error: ${groupsError?.message || 'none'}`);
+      
       if (!groupsError && groups?.length > 0) {
         questionGroups = groups;
       } else {
         // Fallback: read from section's task_config
+        console.log(`[GET] Falling back to task_config for groups`);
         for (const sec of listeningSections) {
+          console.log(`[GET] Section ${sec.id} task_config:`, sec.task_config ? 'present' : 'null');
           if (sec.task_config) {
             try {
               const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
               if (config.question_groups) {
+                console.log(`[GET] Found ${config.question_groups.length} groups in section ${sec.id}`);
                 questionGroups.push(...config.question_groups);
               }
-            } catch (e) { /* ignore parse errors */ }
+            } catch (e) { 
+              console.error(`[GET] Failed to parse task_config for section ${sec.id}:`, e.message);
+            }
           }
         }
       }
     }
 
+    console.log(`[GET] Total question groups: ${questionGroups.length}`);
+    console.log(`========== GET COMPLETE ==========\n`);
+
     res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups });
   } catch (err) {
+    console.error(`[GET] Error:`, err);
     res.status(500).json({ error: err.message });
   }
 };
