@@ -8,21 +8,34 @@ export const saveExamStructure = async (req, res) => {
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
   try {
-    // 1. Update Exam Metadata
+    // 1. Update Exam Metadata - first try with all fields, then gracefully handle missing columns
+    const examPayload = {
+      title: exam.title,
+      description: exam.description,
+      status: exam.status,
+      modules_config: exam.modules_config,
+      code: exam.code,
+      type: exam.type
+    };
+    
+    // Try to update with listening_config if field exists
     const { error: examError } = await supabase
       .from("exams")
-      .update({
-        title: exam.title,
-        description: exam.description,
-        status: exam.status,
-        modules_config: exam.modules_config,
-        code: exam.code,
-        type: exam.type,
-        listening_config: exam.listening_config || null
-      })
+      .update({ ...examPayload, listening_config: exam.listening_config || null })
       .eq("id", examId);
 
-    if (examError) throw examError;
+    if (examError) {
+      // If listening_config column doesn't exist, retry without it
+      if (examError.code === '42703') {
+        const { error: retryError } = await supabase
+          .from("exams")
+          .update(examPayload)
+          .eq("id", examId);
+        if (retryError) throw retryError;
+      } else {
+        throw examError;
+      }
+    }
 
     // 2. Soft delete any questions that were removed
     if (deletedQuestionIds && deletedQuestionIds.length > 0) {
@@ -45,14 +58,19 @@ export const saveExamStructure = async (req, res) => {
 
     // 2. Upsert Sections
     for (const section of sections) {
-      const payload = {
+      const basePayload = {
         exam_id: examId,
         module_type: section.module_type,
         section_order: section.section_order,
         title: section.title,
         content: section.content,
         audio_url: section.audio_url,
-        task_config: section.task_config || null, // For writing sections
+        task_config: section.task_config || null // For writing sections
+      };
+      
+      // Extended payload with optional columns (may not exist in older schemas)
+      const extendedPayload = {
+        ...basePayload,
         audio_start_time: section.audio_start_time || 0,
         section_description: section.section_description || null
       };
@@ -61,17 +79,35 @@ export const saveExamStructure = async (req, res) => {
       const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sectionId);
       
       if (isUUID) {
-        const { error: updateError } = await supabase.from("exam_sections").update(payload).eq("id", sectionId);
-        if (updateError) throw updateError;
+        // Try with extended fields first
+        let { error: updateError } = await supabase.from("exam_sections").update(extendedPayload).eq("id", sectionId);
+        if (updateError && updateError.code === '42703') {
+          // Retry with base payload if columns don't exist
+          const { error: retryError } = await supabase.from("exam_sections").update(basePayload).eq("id", sectionId);
+          if (retryError) throw retryError;
+        } else if (updateError) {
+          throw updateError;
+        }
       } else {
-        // Insert new section
-        const { data: newSection, error: insertError } = await supabase
+        // Insert new section - try extended first
+        let { data: newSection, error: insertError } = await supabase
           .from("exam_sections")
-          .insert([payload])
+          .insert([extendedPayload])
           .select()
           .single();
         
-        if (insertError) throw insertError;
+        if (insertError && insertError.code === '42703') {
+          // Retry with base payload
+          const { data: retryData, error: retryError } = await supabase
+            .from("exam_sections")
+            .insert([basePayload])
+            .select()
+            .single();
+          if (retryError) throw retryError;
+          newSection = retryData;
+        } else if (insertError) {
+          throw insertError;
+        }
         
         // Record mapping
         idMapping.sections[sectionId] = newSection.id;
