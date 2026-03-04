@@ -125,10 +125,16 @@ export const saveExamStructure = async (req, res) => {
       }
 
       // 4. Handle Question Groups for listening sections
+      // Store question groups in section content as JSON if table doesn't exist
       if (section.module_type === 'listening' && questionGroups) {
         const sectionGroups = questionGroups.filter(g => g.section_id === section.id);
         
+        // Try to use the dedicated table, fall back to storing in section
+        let useGroupsTable = true;
+        
         for (const group of sectionGroups) {
+          if (!useGroupsTable) break;
+          
           const groupPayload = {
             section_id: sectionId,
             group_order: group.group_order || 1,
@@ -154,22 +160,54 @@ export const saveExamStructure = async (req, res) => {
           const groupId = group.id;
           const isGroupUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(groupId);
 
-          if (isGroupUUID) {
-            const { error: gUpdateError } = await supabase
-              .from("listening_question_groups")
-              .update(groupPayload)
-              .eq("id", groupId);
-            if (gUpdateError && gUpdateError.code !== '42P01') throw gUpdateError;
-          } else {
-            const { data: newGroup, error: gInsertError } = await supabase
-              .from("listening_question_groups")
-              .insert([groupPayload])
-              .select()
-              .single();
-            
-            if (gInsertError && gInsertError.code !== '42P01') throw gInsertError;
-            if (newGroup) idMapping.groups[groupId] = newGroup.id;
+          try {
+            if (isGroupUUID) {
+              const { error: gUpdateError } = await supabase
+                .from("listening_question_groups")
+                .update(groupPayload)
+                .eq("id", groupId);
+              if (gUpdateError) {
+                if (gUpdateError.code === '42P01') {
+                  useGroupsTable = false;
+                } else {
+                  throw gUpdateError;
+                }
+              }
+            } else {
+              const { data: newGroup, error: gInsertError } = await supabase
+                .from("listening_question_groups")
+                .insert([groupPayload])
+                .select()
+                .single();
+              
+              if (gInsertError) {
+                if (gInsertError.code === '42P01') {
+                  useGroupsTable = false;
+                } else {
+                  throw gInsertError;
+                }
+              }
+              if (newGroup) idMapping.groups[groupId] = newGroup.id;
+            }
+          } catch (err) {
+            if (err.code === '42P01') {
+              useGroupsTable = false;
+            } else {
+              throw err;
+            }
           }
+        }
+        
+        // Fallback: store groups in section's task_config as JSON
+        if (!useGroupsTable && sectionGroups.length > 0) {
+          const groupsData = sectionGroups.map(g => ({
+            ...g,
+            section_id: sectionId // Update to real section ID
+          }));
+          await supabase
+            .from("exam_sections")
+            .update({ task_config: JSON.stringify({ question_groups: groupsData }) })
+            .eq("id", sectionId);
         }
       }
     }
@@ -605,16 +643,32 @@ export const getExam = async (req, res) => {
 
         // Fetch question groups for listening sections
         let questionGroups = [];
-        const listeningSectionIds = sections?.filter(s => s.module_type === 'listening').map(s => s.id) || [];
+        const listeningSections = sections?.filter(s => s.module_type === 'listening') || [];
+        const listeningSectionIds = listeningSections.map(s => s.id);
         
         if (listeningSectionIds.length > 0) {
-          const { data: groups } = await supabase
+          // Try dedicated table first
+          const { data: groups, error: groupsError } = await supabase
             .from("listening_question_groups")
             .select("*")
             .in("section_id", listeningSectionIds)
             .order("group_order", { ascending: true });
           
-          questionGroups = groups || [];
+          if (!groupsError && groups?.length > 0) {
+            questionGroups = groups;
+          } else {
+            // Fallback: read from section's task_config
+            for (const sec of listeningSections) {
+              if (sec.task_config) {
+                try {
+                  const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
+                  if (config.question_groups) {
+                    questionGroups.push(...config.question_groups);
+                  }
+                } catch (e) { /* ignore parse errors */ }
+              }
+            }
+          }
         }
         
         return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups });
@@ -639,17 +693,31 @@ export const getExam = async (req, res) => {
 
     // Fetch question groups for listening sections
     let questionGroups = [];
-    const listeningSectionIds = sections?.filter(s => s.module_type === 'listening').map(s => s.id) || [];
+    const listeningSections = sections?.filter(s => s.module_type === 'listening') || [];
+    const listeningSectionIds = listeningSections.map(s => s.id);
     
     if (listeningSectionIds.length > 0) {
+      // Try dedicated table first
       const { data: groups, error: groupsError } = await supabase
         .from("listening_question_groups")
         .select("*")
         .in("section_id", listeningSectionIds)
         .order("group_order", { ascending: true });
       
-      if (!groupsError) {
-        questionGroups = groups || [];
+      if (!groupsError && groups?.length > 0) {
+        questionGroups = groups;
+      } else {
+        // Fallback: read from section's task_config
+        for (const sec of listeningSections) {
+          if (sec.task_config) {
+            try {
+              const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
+              if (config.question_groups) {
+                questionGroups.push(...config.question_groups);
+              }
+            } catch (e) { /* ignore parse errors */ }
+          }
+        }
       }
     }
 
