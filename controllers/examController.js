@@ -153,9 +153,14 @@ export const saveExamStructure = async (req, res) => {
 
       // 5. Handle Question Groups for listening sections
       if (section.module_type === 'listening' && questionGroups) {
-        // Find groups that belong to this section (match by original section ID)
-        const sectionGroups = questionGroups.filter(g => g.section_id === section.id);
-        console.log(`[SAVE] Section ${section.id} has ${sectionGroups.length} question groups`);
+        // Find groups that belong to this section (match by original OR new section ID)
+        const originalSectionId = section.id;
+        const sectionGroups = questionGroups.filter(g => {
+          const match = g.section_id === originalSectionId || g.section_id === sectionId;
+          console.log(`[SAVE] Group ${g.id} section_id=${g.section_id}, checking against original=${originalSectionId}, actual=${sectionId}, match=${match}`);
+          return match;
+        });
+        console.log(`[SAVE] Section ${section.id} (${section.module_type}) has ${sectionGroups.length} question groups out of ${questionGroups.length} total`);
         
         if (sectionGroups.length > 0) {
           // Store groups in section's task_config with UPDATED section_id
@@ -600,6 +605,11 @@ export const getExam = async (req, res) => {
       .order("section_order", { ascending: true });
 
     console.log(`[GET] Sections loaded: ${sections?.length || 0}`);
+    if (sections) {
+      sections.forEach(s => {
+        console.log(`[GET] Section ${s.id}: type=${s.module_type}, task_config=${s.task_config ? 'present (' + s.task_config.substring(0, 100) + '...)' : 'NULL'}`);
+      });
+    }
 
     // Fetch questions (exclude deleted)
     const { data: questions, error: questionsError } = await supabase
