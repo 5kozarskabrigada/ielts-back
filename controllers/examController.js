@@ -27,11 +27,39 @@ export const saveExamStructure = async (req, res) => {
 
   try {
     // 1. Update Exam Metadata (basic fields only)
+    // Also store question groups in modules_config as a GUARANTEED fallback
+    const modulesConfig = exam.modules_config || {};
+    if (questionGroups && questionGroups.length > 0) {
+      modulesConfig.listening_question_groups = questionGroups.map(g => ({
+        id: g.id,
+        section_id: g.section_id,
+        group_order: g.group_order || 1,
+        question_type: g.question_type,
+        question_range_start: g.question_range_start,
+        question_range_end: g.question_range_end,
+        instruction_text: g.instruction_text || null,
+        max_words: g.max_words || null,
+        max_numbers: g.max_numbers || null,
+        answer_format: g.answer_format || 'words_and_numbers',
+        has_example: g.has_example || false,
+        example_data: g.example_data || null,
+        audio_start_time: g.audio_start_time || null,
+        shared_options: g.shared_options || null,
+        image_url: g.image_url || null,
+        image_description: g.image_description || null,
+        layout_type: g.layout_type || null,
+        points_per_question: g.points_per_question || 1,
+        case_sensitive: g.case_sensitive || false,
+        spelling_tolerance: g.spelling_tolerance !== false
+      }));
+      console.log(`[SAVE] Storing ${questionGroups.length} groups in modules_config.listening_question_groups`);
+    }
+    
     const examPayload = {
       title: exam.title,
       description: exam.description,
       status: exam.status,
-      modules_config: exam.modules_config,
+      modules_config: modulesConfig,
       code: exam.code,
       type: exam.type
     };
@@ -45,7 +73,7 @@ export const saveExamStructure = async (req, res) => {
       console.error(`[SAVE] Exam update error:`, examError);
       throw new Error(`Failed to update exam: ${examError.message}`);
     }
-    console.log(`[SAVE] Exam metadata updated`);
+    console.log(`[SAVE] Exam metadata updated (including question groups fallback)`);
 
     // 2. Soft delete removed questions
     if (deletedQuestionIds?.length > 0) {
@@ -663,7 +691,7 @@ export const getExam = async (req, res) => {
           if (!groupsError && groups?.length > 0) {
             questionGroups = groups;
           } else {
-            // Fallback: read from section's task_config
+            // Fallback 1: read from section's task_config
             console.log(`[GET] Falling back to task_config for groups`);
             for (const sec of listeningSections) {
               console.log(`[GET] Section ${sec.id} task_config:`, sec.task_config ? 'present' : 'null');
@@ -678,6 +706,13 @@ export const getExam = async (req, res) => {
                   console.error(`[GET] Failed to parse task_config for section ${sec.id}:`, e.message);
                 }
               }
+            }
+            
+            // Fallback 2: read from exam's modules_config (GUARANTEED to exist)
+            if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
+              console.log(`[GET] Falling back to modules_config for groups`);
+              questionGroups = exam.modules_config.listening_question_groups;
+              console.log(`[GET] Found ${questionGroups.length} groups in modules_config`);
             }
           }
         }
@@ -732,7 +767,7 @@ export const getExam = async (req, res) => {
       if (!groupsError && groups?.length > 0) {
         questionGroups = groups;
       } else {
-        // Fallback: read from section's task_config
+        // Fallback 1: read from section's task_config
         console.log(`[GET] Falling back to task_config for groups`);
         for (const sec of listeningSections) {
           console.log(`[GET] Section ${sec.id} task_config:`, sec.task_config ? 'present' : 'null');
@@ -747,6 +782,13 @@ export const getExam = async (req, res) => {
               console.error(`[GET] Failed to parse task_config for section ${sec.id}:`, e.message);
             }
           }
+        }
+        
+        // Fallback 2: read from exam's modules_config (GUARANTEED to exist)
+        if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
+          console.log(`[GET] Falling back to modules_config for groups`);
+          questionGroups = exam.modules_config.listening_question_groups;
+          console.log(`[GET] Found ${questionGroups.length} groups in modules_config`);
         }
       }
     }
