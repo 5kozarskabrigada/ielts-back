@@ -108,7 +108,15 @@ export const saveExamStructure = async (req, res) => {
     // First, map section IDs for all questions
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
-      const { id, section_id, question_text, question_type, correct_answer, points, question_number, exam_id, created_at, is_deleted, ...extraFields } = q;
+      const { 
+        id, section_id, question_text, question_type, correct_answer, points, question_number, 
+        exam_id, created_at, is_deleted, 
+        // Form/table completion fields
+        is_info_row, row_order, label_text, info_text, question_template, answer_alternatives,
+        // Options for multiple choice
+        option_a, option_b, option_c, option_d,
+        ...extraFields 
+      } = q;
       return {
         originalId: id,
         isNew: !isUUID(id),
@@ -120,6 +128,18 @@ export const saveExamStructure = async (req, res) => {
           correct_answer: correct_answer || q.answer || '',
           points: points || 1,
           question_number: question_number || 0,
+          // Form/table completion fields
+          is_info_row: is_info_row || false,
+          row_order: row_order || null,
+          label_text: label_text || null,
+          info_text: info_text || null,
+          question_template: question_template || null,
+          answer_alternatives: answer_alternatives || null,
+          // Options for multiple choice
+          option_a: option_a || null,
+          option_b: option_b || null,
+          option_c: option_c || null,
+          option_d: option_d || null,
           question_data: Object.keys(extraFields).length > 0 ? extraFields : null
         }
       };
