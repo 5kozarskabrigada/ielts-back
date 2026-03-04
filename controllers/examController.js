@@ -17,8 +17,8 @@ export const saveExamStructure = async (req, res) => {
       { status: exam.status },
       { modules_config: exam.modules_config },
       { code: exam.code },
-      { type: exam.type },
-      { listening_config: exam.listening_config || null }
+      { type: exam.type }
+      // Removed listening_config - column doesn't exist in production
     ];
     
     // Build payload, removing fields that cause errors
@@ -35,16 +35,25 @@ export const saveExamStructure = async (req, res) => {
         .eq("id", examId);
 
       if (examError) {
-        if (examError.code === '42703') {
-          // Column doesn't exist - find and remove it
-          const missingCol = examError.message.match(/column "([^"]+)"/)?.[1];
+        // Handle both PostgreSQL column errors and Supabase schema cache errors
+        const isColumnError = examError.code === '42703' || 
+                              examError.message?.includes('column') ||
+                              examError.message?.includes('schema cache');
+        
+        if (isColumnError) {
+          // Try to extract column name from various error formats
+          const missingCol = examError.message.match(/column "([^"]+)"/)?.[1] ||
+                            examError.message.match(/'([^']+)' column/)?.[1] ||
+                            examError.message.match(/column[^a-z]*([a-z_]+)/i)?.[1];
           if (missingCol) {
             warnings.push(`Column '${missingCol}' not found in exams table, skipping`);
             delete examPayload[missingCol];
           } else {
             // Can't identify column, try removing last added field
             const keys = Object.keys(examPayload);
-            delete examPayload[keys[keys.length - 1]];
+            const removed = keys[keys.length - 1];
+            warnings.push(`Removing field '${removed}' due to error: ${examError.message}`);
+            delete examPayload[removed];
           }
         } else {
           throw examError;
@@ -80,19 +89,40 @@ export const saveExamStructure = async (req, res) => {
     // Helper: Try to save with progressively smaller payload
     const saveWithFallback = async (table, payload, id = null) => {
       let currentPayload = { ...payload };
-      let maxAttempts = Object.keys(currentPayload).length;
+      let maxAttempts = Object.keys(currentPayload).length + 1;
+      
+      // Helper to check if error is a column/schema error
+      const isColumnError = (error) => 
+        error.code === '42703' || 
+        error.message?.includes('column') ||
+        error.message?.includes('schema cache');
+      
+      // Helper to extract column name from error
+      const extractColumnName = (error) => 
+        error.message?.match(/column "([^"]+)"/)?.[1] ||
+        error.message?.match(/'([^']+)' column/)?.[1] ||
+        error.message?.match(/column[^a-z]*([a-z_]+)/i)?.[1];
       
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
           if (id) {
             const { data, error } = await supabase.from(table).update(currentPayload).eq("id", id).select().single();
             if (error) {
-              if (error.code === '42703') {
-                const missingCol = error.message.match(/column "([^"]+)"/)?.[1];
+              if (isColumnError(error)) {
+                const missingCol = extractColumnName(error);
                 if (missingCol && currentPayload[missingCol] !== undefined) {
                   warnings.push(`Column '${missingCol}' not found in ${table}, skipping`);
                   delete currentPayload[missingCol];
                   continue;
+                } else {
+                  // Can't identify column, remove last field
+                  const keys = Object.keys(currentPayload);
+                  if (keys.length > 0) {
+                    const removed = keys[keys.length - 1];
+                    warnings.push(`Removing '${removed}' from ${table} due to: ${error.message}`);
+                    delete currentPayload[removed];
+                    continue;
+                  }
                 }
               }
               throw error;
@@ -101,12 +131,21 @@ export const saveExamStructure = async (req, res) => {
           } else {
             const { data, error } = await supabase.from(table).insert([currentPayload]).select().single();
             if (error) {
-              if (error.code === '42703') {
-                const missingCol = error.message.match(/column "([^"]+)"/)?.[1];
+              if (isColumnError(error)) {
+                const missingCol = extractColumnName(error);
                 if (missingCol && currentPayload[missingCol] !== undefined) {
                   warnings.push(`Column '${missingCol}' not found in ${table}, skipping`);
                   delete currentPayload[missingCol];
                   continue;
+                } else {
+                  // Can't identify column, remove last field
+                  const keys = Object.keys(currentPayload);
+                  if (keys.length > 0) {
+                    const removed = keys[keys.length - 1];
+                    warnings.push(`Removing '${removed}' from ${table} due to: ${error.message}`);
+                    delete currentPayload[removed];
+                    continue;
+                  }
                 }
               }
               throw error;
