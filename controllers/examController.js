@@ -49,7 +49,8 @@ export const saveExamStructure = async (req, res) => {
         section_order: section.section_order,
         title: section.title,
         content: section.content,
-        audio_url: section.audio_url
+        audio_url: section.audio_url,
+        task_config: section.task_config || null // For writing sections
       };
 
       let sectionId = section.id;
