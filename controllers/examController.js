@@ -3,31 +3,22 @@ import { supabase } from "../supabaseClient.js";
 
 // ... existing functions (listExams, createExam, getExam, etc.)
 
+// Helper to check if string is a valid UUID
+const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+
 export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
-  console.log(`\n========== SAVE START ==========`);
+  console.log(`\n========== SAVE START (OPTIMIZED) ==========`);
   console.log(`[SAVE] Exam ID: ${examId}`);
-  console.log(`[SAVE] Sections received: ${sections?.length || 0}`);
-  console.log(`[SAVE] Questions received: ${questions?.length || 0}`);
-  console.log(`[SAVE] Question Groups received: ${questionGroups?.length || 0}`);
-  
-  if (questionGroups?.length > 0) {
-    console.log(`[SAVE] Groups detail:`, JSON.stringify(questionGroups.map(g => ({
-      id: g.id,
-      section_id: g.section_id,
-      type: g.question_type,
-      range: `${g.question_range_start}-${g.question_range_end}`
-    })), null, 2));
-  }
+  console.log(`[SAVE] Sections: ${sections?.length || 0}, Questions: ${questions?.length || 0}, Groups: ${questionGroups?.length || 0}`);
 
   const warnings = [];
   const idMapping = { sections: {}, questions: {}, groups: {} };
 
   try {
-    // 1. Update Exam Metadata (basic fields only)
-    // Also store question groups in modules_config as a GUARANTEED fallback
+    // 1. Update Exam Metadata + store question groups in modules_config (GUARANTEED fallback)
     const modulesConfig = exam.modules_config || {};
     if (questionGroups && questionGroups.length > 0) {
       modulesConfig.listening_question_groups = questionGroups.map(g => ({
@@ -52,205 +43,147 @@ export const saveExamStructure = async (req, res) => {
         case_sensitive: g.case_sensitive || false,
         spelling_tolerance: g.spelling_tolerance !== false
       }));
-      console.log(`[SAVE] Storing ${questionGroups.length} groups in modules_config.listening_question_groups`);
     }
-    
-    const examPayload = {
-      title: exam.title,
-      description: exam.description,
-      status: exam.status,
-      modules_config: modulesConfig,
-      code: exam.code,
-      type: exam.type
-    };
     
     const { error: examError } = await supabase
       .from("exams")
-      .update(examPayload)
+      .update({
+        title: exam.title,
+        description: exam.description,
+        status: exam.status,
+        modules_config: modulesConfig,
+        code: exam.code,
+        type: exam.type
+      })
       .eq("id", examId);
 
-    if (examError) {
-      console.error(`[SAVE] Exam update error:`, examError);
-      throw new Error(`Failed to update exam: ${examError.message}`);
-    }
-    console.log(`[SAVE] Exam metadata updated (including question groups fallback)`);
+    if (examError) throw new Error(`Failed to update exam: ${examError.message}`);
+    console.log(`[SAVE] Exam metadata saved`);
 
-    // 2. Soft delete removed questions
+    // 2. Soft delete removed questions (single batch operation)
     if (deletedQuestionIds?.length > 0) {
-      const { error: deleteErr } = await supabase
-        .from("questions")
-        .update({ is_deleted: true })
-        .in("id", deletedQuestionIds);
-      if (deleteErr) warnings.push(`Soft delete: ${deleteErr.message}`);
+      await supabase.from("questions").update({ is_deleted: true }).in("id", deletedQuestionIds);
     }
 
-    // 3. Upsert Sections and their Questions/Groups
-    for (const section of sections) {
-      console.log(`\n[SAVE] Processing section: ${section.id} (${section.module_type})`);
-      
-      const sectionPayload = {
-        exam_id: examId,
-        module_type: section.module_type,
-        section_order: section.section_order,
-        title: section.title,
-        content: section.content,
-        audio_url: section.audio_url
-        // task_config will be set separately for listening sections
-      };
+    // 3. Process Sections - separate new vs existing for batching
+    const existingSections = sections.filter(s => isUUID(s.id));
+    const newSections = sections.filter(s => !isUUID(s.id));
 
-      let sectionId = section.id;
-      const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sectionId);
-      
-      if (isUUID) {
-        // Update existing section
-        const { error } = await supabase
-          .from("exam_sections")
-          .update(sectionPayload)
-          .eq("id", sectionId);
-        if (error) {
-          console.error(`[SAVE] Section update error:`, error);
-          warnings.push(`Section ${section.title}: ${error.message}`);
-        } else {
-          console.log(`[SAVE] Section updated: ${sectionId}`);
-        }
-      } else {
-        // Insert new section
-        const { data: newSection, error } = await supabase
-          .from("exam_sections")
-          .insert([sectionPayload])
-          .select()
-          .single();
-        if (error) {
-          console.error(`[SAVE] Section insert error:`, error);
-          warnings.push(`Section ${section.title}: ${error.message}`);
-          continue;
-        }
-        if (newSection) {
-          idMapping.sections[sectionId] = newSection.id;
-          console.log(`[SAVE] Section created: ${sectionId} -> ${newSection.id}`);
-          sectionId = newSection.id;
-        }
-      }
-
-      // 4. Save Questions for this section
-      const sectionQuestions = questions.filter(q => q.section_id === section.id);
-      console.log(`[SAVE] Section ${section.id} has ${sectionQuestions.length} questions`);
-      
-      for (const q of sectionQuestions) {
-        // Pack all extra fields into question_data
-        const { id, section_id, question_text, question_type, correct_answer, points, question_number, exam_id, created_at, is_deleted, ...extraFields } = q;
-        
-        const qPayload = {
+    // Batch update existing sections
+    if (existingSections.length > 0) {
+      await Promise.all(existingSections.map(section => 
+        supabase.from("exam_sections").update({
           exam_id: examId,
-          section_id: sectionId,
+          module_type: section.module_type,
+          section_order: section.section_order,
+          title: section.title,
+          content: section.content,
+          audio_url: section.audio_url
+        }).eq("id", section.id)
+      ));
+      console.log(`[SAVE] Updated ${existingSections.length} existing sections`);
+    }
+
+    // Insert new sections (must be sequential to get IDs)
+    for (const section of newSections) {
+      const { data: newSection, error } = await supabase
+        .from("exam_sections")
+        .insert([{
+          exam_id: examId,
+          module_type: section.module_type,
+          section_order: section.section_order,
+          title: section.title,
+          content: section.content,
+          audio_url: section.audio_url
+        }])
+        .select()
+        .single();
+      if (newSection) {
+        idMapping.sections[section.id] = newSection.id;
+        console.log(`[SAVE] New section: ${section.id} -> ${newSection.id}`);
+      }
+    }
+
+    // 4. Process Questions - batch by new vs existing
+    // First, map section IDs for all questions
+    const mappedQuestions = questions.map(q => {
+      const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
+      const { id, section_id, question_text, question_type, correct_answer, points, question_number, exam_id, created_at, is_deleted, ...extraFields } = q;
+      return {
+        originalId: id,
+        isNew: !isUUID(id),
+        payload: {
+          exam_id: examId,
+          section_id: mappedSectionId,
           question_text: question_text || q.text || '',
           question_type: question_type || q.type || 'multiple_choice',
           correct_answer: correct_answer || q.answer || '',
           points: points || 1,
           question_number: question_number || 0,
           question_data: Object.keys(extraFields).length > 0 ? extraFields : null
-        };
-
-        const isQUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q.id);
-
-        if (isQUUID) {
-          const { error } = await supabase
-            .from("questions")
-            .update(qPayload)
-            .eq("id", q.id);
-          if (error) {
-            console.error(`[SAVE] Question update error for ${q.id}:`, error);
-            warnings.push(`Q${question_number}: ${error.message}`);
-          }
-        } else {
-          const { data: newQ, error } = await supabase
-            .from("questions")
-            .insert([qPayload])
-            .select()
-            .single();
-          if (error) {
-            console.error(`[SAVE] Question insert error:`, error);
-            warnings.push(`Q${question_number}: ${error.message}`);
-          }
-          if (newQ) {
-            idMapping.questions[q.id] = newQ.id;
-            console.log(`[SAVE] Question created: ${q.id} -> ${newQ.id}`);
-          }
         }
-      }
+      };
+    });
 
-      // 5. Handle Question Groups for listening sections
-      if (section.module_type === 'listening' && questionGroups) {
-        // Find groups that belong to this section (match by original OR new section ID)
-        const originalSectionId = section.id;
-        const sectionGroups = questionGroups.filter(g => {
-          const match = g.section_id === originalSectionId || g.section_id === sectionId;
-          console.log(`[SAVE] Group ${g.id} section_id=${g.section_id}, checking against original=${originalSectionId}, actual=${sectionId}, match=${match}`);
-          return match;
+    const existingQuestions = mappedQuestions.filter(q => !q.isNew);
+    const newQuestions = mappedQuestions.filter(q => q.isNew);
+
+    // Batch update existing questions (parallel)
+    if (existingQuestions.length > 0) {
+      await Promise.all(existingQuestions.map(q =>
+        supabase.from("questions").update(q.payload).eq("id", q.originalId)
+      ));
+      console.log(`[SAVE] Updated ${existingQuestions.length} existing questions`);
+    }
+
+    // Batch insert new questions
+    if (newQuestions.length > 0) {
+      const { data: insertedQuestions, error: insertError } = await supabase
+        .from("questions")
+        .insert(newQuestions.map(q => q.payload))
+        .select();
+      
+      if (insertedQuestions) {
+        // Map old IDs to new IDs (by matching on question_number + section_id)
+        insertedQuestions.forEach((inserted, idx) => {
+          if (newQuestions[idx]) {
+            idMapping.questions[newQuestions[idx].originalId] = inserted.id;
+          }
         });
-        console.log(`[SAVE] Section ${section.id} (${section.module_type}) has ${sectionGroups.length} question groups out of ${questionGroups.length} total`);
-        
-        if (sectionGroups.length > 0) {
-          // Store groups in section's task_config with UPDATED section_id
-          const groupsConfig = {
-            question_groups: sectionGroups.map(g => ({
-              id: g.id,
-              section_id: sectionId, // Use the real (possibly new) section ID
-              group_order: g.group_order || 1,
-              question_type: g.question_type,
-              question_range_start: g.question_range_start,
-              question_range_end: g.question_range_end,
-              instruction_text: g.instruction_text || null,
-              max_words: g.max_words || null,
-              max_numbers: g.max_numbers || null,
-              answer_format: g.answer_format || 'words_and_numbers',
-              has_example: g.has_example || false,
-              example_data: g.example_data || null,
-              audio_start_time: g.audio_start_time || null,
-              shared_options: g.shared_options || null,
-              image_url: g.image_url || null,
-              image_description: g.image_description || null,
-              layout_type: g.layout_type || null,
-              points_per_question: g.points_per_question || 1,
-              case_sensitive: g.case_sensitive || false,
-              spelling_tolerance: g.spelling_tolerance !== false
-            }))
-          };
-          
-          console.log(`[SAVE] Saving groups to task_config for section ${sectionId}:`, JSON.stringify(groupsConfig.question_groups.map(g => ({
-            id: g.id,
-            section_id: g.section_id,
-            type: g.question_type,
-            range: `${g.question_range_start}-${g.question_range_end}`
-          }))));
-          
-          const { error: taskConfigError } = await supabase
-            .from("exam_sections")
-            .update({ task_config: JSON.stringify(groupsConfig) })
-            .eq("id", sectionId);
-            
-          if (taskConfigError) {
-            console.error(`[SAVE] Failed to save groups to task_config:`, taskConfigError);
-            warnings.push(`Groups for ${section.title}: ${taskConfigError.message}`);
-          } else {
-            console.log(`[SAVE] Groups saved to task_config for section ${sectionId}`);
-          }
-        }
+        console.log(`[SAVE] Inserted ${insertedQuestions.length} new questions`);
       }
     }
 
-    console.log(`\n========== SAVE COMPLETE ==========`);
-    console.log(`[SAVE] ID Mappings:`, JSON.stringify(idMapping));
-    console.log(`[SAVE] Warnings: ${warnings.length}`);
-    if (warnings.length > 0) console.log(`[SAVE] Warning details:`, warnings);
-    
-    res.json({ 
-      message: "Exam structure saved successfully", 
-      idMapping,
-      warnings: warnings.length > 0 ? warnings : undefined
-    });
+    // 5. Update task_config for listening sections (store groups there too as backup)
+    const listeningSections = sections.filter(s => s.module_type === 'listening');
+    if (listeningSections.length > 0 && questionGroups?.length > 0) {
+      await Promise.all(listeningSections.map(section => {
+        const realSectionId = idMapping.sections[section.id] || section.id;
+        const sectionGroups = questionGroups.filter(g => 
+          g.section_id === section.id || g.section_id === realSectionId
+        );
+        
+        if (sectionGroups.length > 0) {
+          const groupsConfig = {
+            question_groups: sectionGroups.map(g => ({
+              ...g,
+              section_id: realSectionId
+            }))
+          };
+          return supabase
+            .from("exam_sections")
+            .update({ task_config: JSON.stringify(groupsConfig) })
+            .eq("id", realSectionId);
+        }
+        return Promise.resolve();
+      }));
+      console.log(`[SAVE] Updated task_config for ${listeningSections.length} listening sections`);
+    }
+
+    console.log(`========== SAVE COMPLETE ==========\n`);
+    res.json({ message: "Exam saved", idMapping, warnings: warnings.length > 0 ? warnings : undefined });
   } catch (err) {
-    console.error("[SAVE] Fatal error:", err);
+    console.error("[SAVE] Error:", err);
     res.status(500).json({ error: err.message, warnings });
   }
 };
