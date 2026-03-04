@@ -29,6 +29,7 @@ export const saveExamStructure = async (req, res) => {
         question_range_start: g.question_range_start,
         question_range_end: g.question_range_end,
         instruction_text: g.instruction_text || null,
+        table_title: g.table_title || null,
         max_words: g.max_words || null,
         max_numbers: g.max_numbers || null,
         answer_format: g.answer_format || 'words_and_numbers',
