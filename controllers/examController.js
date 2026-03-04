@@ -7,45 +7,66 @@ export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
-  try {
-    // 1. Update Exam Metadata - first try with all fields, then gracefully handle missing columns
-    const examPayload = {
-      title: exam.title,
-      description: exam.description,
-      status: exam.status,
-      modules_config: exam.modules_config,
-      code: exam.code,
-      type: exam.type
-    };
-    
-    // Try to update with listening_config if field exists
-    const { error: examError } = await supabase
-      .from("exams")
-      .update({ ...examPayload, listening_config: exam.listening_config || null })
-      .eq("id", examId);
+  const warnings = []; // Track non-fatal issues
 
-    if (examError) {
-      // If listening_config column doesn't exist, retry without it
-      if (examError.code === '42703') {
-        const { error: retryError } = await supabase
-          .from("exams")
-          .update(examPayload)
-          .eq("id", examId);
-        if (retryError) throw retryError;
+  try {
+    // 1. Update Exam Metadata - try progressively smaller payloads
+    const examFields = [
+      { title: exam.title },
+      { description: exam.description },
+      { status: exam.status },
+      { modules_config: exam.modules_config },
+      { code: exam.code },
+      { type: exam.type },
+      { listening_config: exam.listening_config || null }
+    ];
+    
+    // Build payload, removing fields that cause errors
+    let examPayload = {};
+    for (const field of examFields) {
+      examPayload = { ...examPayload, ...field };
+    }
+    
+    let examSaved = false;
+    while (!examSaved && Object.keys(examPayload).length > 0) {
+      const { error: examError } = await supabase
+        .from("exams")
+        .update(examPayload)
+        .eq("id", examId);
+
+      if (examError) {
+        if (examError.code === '42703') {
+          // Column doesn't exist - find and remove it
+          const missingCol = examError.message.match(/column "([^"]+)"/)?.[1];
+          if (missingCol) {
+            warnings.push(`Column '${missingCol}' not found in exams table, skipping`);
+            delete examPayload[missingCol];
+          } else {
+            // Can't identify column, try removing last added field
+            const keys = Object.keys(examPayload);
+            delete examPayload[keys[keys.length - 1]];
+          }
+        } else {
+          throw examError;
+        }
       } else {
-        throw examError;
+        examSaved = true;
       }
     }
 
-    // 2. Soft delete any questions that were removed
+    // 2. Soft delete any questions that were removed (non-blocking)
     if (deletedQuestionIds && deletedQuestionIds.length > 0) {
-      const { error: deleteError } = await supabase
-        .from("questions")
-        .update({ is_deleted: true })
-        .in("id", deletedQuestionIds);
-      
-      if (deleteError && deleteError.code !== '42703') { // Ignore if column doesn't exist
-        console.warn("Failed to soft delete questions:", deleteError);
+      try {
+        const { error: deleteError } = await supabase
+          .from("questions")
+          .update({ is_deleted: true })
+          .in("id", deletedQuestionIds);
+        
+        if (deleteError) {
+          warnings.push(`Soft delete skipped: ${deleteError.message}`);
+        }
+      } catch (e) {
+        warnings.push(`Soft delete failed: ${e.message}`);
       }
     }
 
@@ -56,21 +77,59 @@ export const saveExamStructure = async (req, res) => {
       groups: {}
     };
 
-    // 2. Upsert Sections
+    // Helper: Try to save with progressively smaller payload
+    const saveWithFallback = async (table, payload, id = null) => {
+      let currentPayload = { ...payload };
+      let maxAttempts = Object.keys(currentPayload).length;
+      
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          if (id) {
+            const { data, error } = await supabase.from(table).update(currentPayload).eq("id", id).select().single();
+            if (error) {
+              if (error.code === '42703') {
+                const missingCol = error.message.match(/column "([^"]+)"/)?.[1];
+                if (missingCol && currentPayload[missingCol] !== undefined) {
+                  warnings.push(`Column '${missingCol}' not found in ${table}, skipping`);
+                  delete currentPayload[missingCol];
+                  continue;
+                }
+              }
+              throw error;
+            }
+            return { data, error: null };
+          } else {
+            const { data, error } = await supabase.from(table).insert([currentPayload]).select().single();
+            if (error) {
+              if (error.code === '42703') {
+                const missingCol = error.message.match(/column "([^"]+)"/)?.[1];
+                if (missingCol && currentPayload[missingCol] !== undefined) {
+                  warnings.push(`Column '${missingCol}' not found in ${table}, skipping`);
+                  delete currentPayload[missingCol];
+                  continue;
+                }
+              }
+              throw error;
+            }
+            return { data, error: null };
+          }
+        } catch (err) {
+          if (attempt === maxAttempts - 1) throw err;
+        }
+      }
+      return { data: null, error: new Error('All fields failed') };
+    };
+
+    // 3. Upsert Sections
     for (const section of sections) {
-      const basePayload = {
+      const sectionPayload = {
         exam_id: examId,
         module_type: section.module_type,
         section_order: section.section_order,
         title: section.title,
         content: section.content,
         audio_url: section.audio_url,
-        task_config: section.task_config || null // For writing sections
-      };
-      
-      // Extended payload with optional columns (may not exist in older schemas)
-      const extendedPayload = {
-        ...basePayload,
+        task_config: section.task_config || null,
         audio_start_time: section.audio_start_time || 0,
         section_description: section.section_description || null
       };
@@ -78,89 +137,68 @@ export const saveExamStructure = async (req, res) => {
       let sectionId = section.id;
       const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sectionId);
       
-      if (isUUID) {
-        // Try with extended fields first
-        let { error: updateError } = await supabase.from("exam_sections").update(extendedPayload).eq("id", sectionId);
-        if (updateError && updateError.code === '42703') {
-          // Retry with base payload if columns don't exist
-          const { error: retryError } = await supabase.from("exam_sections").update(basePayload).eq("id", sectionId);
-          if (retryError) throw retryError;
-        } else if (updateError) {
-          throw updateError;
+      try {
+        if (isUUID) {
+          await saveWithFallback("exam_sections", sectionPayload, sectionId);
+        } else {
+          const { data: newSection } = await saveWithFallback("exam_sections", sectionPayload);
+          if (newSection) {
+            idMapping.sections[sectionId] = newSection.id;
+            sectionId = newSection.id;
+          }
         }
-      } else {
-        // Insert new section - try extended first
-        let { data: newSection, error: insertError } = await supabase
-          .from("exam_sections")
-          .insert([extendedPayload])
-          .select()
-          .single();
-        
-        if (insertError && insertError.code === '42703') {
-          // Retry with base payload
-          const { data: retryData, error: retryError } = await supabase
-            .from("exam_sections")
-            .insert([basePayload])
-            .select()
-            .single();
-          if (retryError) throw retryError;
-          newSection = retryData;
-        } else if (insertError) {
-          throw insertError;
-        }
-        
-        // Record mapping
-        idMapping.sections[sectionId] = newSection.id;
-        sectionId = newSection.id; // Update for questions
+      } catch (err) {
+        warnings.push(`Section ${section.title || sectionId} save failed: ${err.message}`);
+        continue; // Skip this section's questions but continue with others
       }
 
-      // 3. Upsert Questions for this section
+      // 4. Upsert Questions for this section
       const sectionQuestions = questions.filter(q => q.section_id === section.id);
       
       for (const q of sectionQuestions) {
-        // Extract standard DB columns
-        const standardFields = ['id', 'section_id', 'question_text', 'text', 'question_type', 'type',
-                                'correct_answer', 'answer', 'points', 'question_number', 'exam_id', 
-                                'module_type', 'created_at', 'is_deleted', 'difficulty_level'];
-        
-        // All other fields (options, headings, endings, match options, etc.) go into question_data
-        const questionData = {};
-        for (const [key, value] of Object.entries(q)) {
-          if (!standardFields.includes(key) && value !== undefined && value !== null && value !== '') {
-            questionData[key] = value;
+        try {
+          // Extract standard DB columns
+          const standardFields = ['id', 'section_id', 'question_text', 'text', 'question_type', 'type',
+                                  'correct_answer', 'answer', 'points', 'question_number', 'exam_id', 
+                                  'module_type', 'created_at', 'is_deleted', 'difficulty_level'];
+          
+          // All other fields (options, headings, endings, match options, etc.) go into question_data
+          const questionData = {};
+          for (const [key, value] of Object.entries(q)) {
+            if (!standardFields.includes(key) && value !== undefined && value !== null && value !== '') {
+              questionData[key] = value;
+            }
           }
-        }
 
-        const qPayload = {
-          exam_id: examId,
-          section_id: sectionId, // Use the real (possibly new) section ID
-          question_text: q.question_text || q.text || '', // Handle potential naming mismatch
-          question_type: q.question_type || q.type,
-          correct_answer: q.correct_answer || q.answer,
-          points: q.points || 1,
-          question_number: q.question_number || 0,
-          question_data: Object.keys(questionData).length > 0 ? questionData : null
-        };
+          const qPayload = {
+            exam_id: examId,
+            section_id: sectionId, // Use the real (possibly new) section ID
+            question_text: q.question_text || q.text || '', // Handle potential naming mismatch
+            question_type: q.question_type || q.type,
+            correct_answer: q.correct_answer || q.answer,
+            points: q.points || 1,
+            question_number: q.question_number || 0,
+            question_data: Object.keys(questionData).length > 0 ? questionData : null
+          };
 
-        const qId = q.id;
-        const isQUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(qId);
+          const qId = q.id;
+          const isQUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(qId);
 
-        if (isQUUID) {
-          const { error: qUpdateError } = await supabase.from("questions").update(qPayload).eq("id", qId);
-          if (qUpdateError) throw qUpdateError;
-        } else {
-          const { data: newQuestion, error: qInsertError } = await supabase
-            .from("questions")
-            .insert([qPayload])
-            .select()
-            .single();
-            
-          if (qInsertError) throw qInsertError;
-          idMapping.questions[qId] = newQuestion.id;
+          if (isQUUID) {
+            await saveWithFallback("questions", qPayload, qId);
+          } else {
+            const { data: newQuestion } = await saveWithFallback("questions", qPayload);
+            if (newQuestion) {
+              idMapping.questions[qId] = newQuestion.id;
+            }
+          }
+        } catch (qErr) {
+          warnings.push(`Question ${q.question_number || q.id} save failed: ${qErr.message}`);
+          // Continue with next question
         }
       }
 
-      // 4. Handle Question Groups for listening sections
+      // 5. Handle Question Groups for listening sections
       // Store question groups in section content as JSON if table doesn't exist
       if (section.module_type === 'listening' && questionGroups) {
         const sectionGroups = questionGroups.filter(g => g.section_id === section.id);
@@ -203,10 +241,10 @@ export const saveExamStructure = async (req, res) => {
                 .update(groupPayload)
                 .eq("id", groupId);
               if (gUpdateError) {
-                if (gUpdateError.code === '42P01') {
+                if (gUpdateError.code === '42P01' || gUpdateError.code === '42703') {
                   useGroupsTable = false;
                 } else {
-                  throw gUpdateError;
+                  warnings.push(`Group update failed: ${gUpdateError.message}`);
                 }
               }
             } else {
@@ -217,56 +255,72 @@ export const saveExamStructure = async (req, res) => {
                 .single();
               
               if (gInsertError) {
-                if (gInsertError.code === '42P01') {
+                if (gInsertError.code === '42P01' || gInsertError.code === '42703') {
                   useGroupsTable = false;
                 } else {
-                  throw gInsertError;
+                  warnings.push(`Group insert failed: ${gInsertError.message}`);
                 }
               }
               if (newGroup) idMapping.groups[groupId] = newGroup.id;
             }
           } catch (err) {
-            if (err.code === '42P01') {
+            if (err.code === '42P01' || err.code === '42703') {
               useGroupsTable = false;
             } else {
-              throw err;
+              warnings.push(`Group save error: ${err.message}`);
             }
           }
         }
         
         // Fallback: store groups in section's task_config as JSON
         if (!useGroupsTable && sectionGroups.length > 0) {
-          const groupsData = sectionGroups.map(g => ({
-            ...g,
-            section_id: sectionId // Update to real section ID
-          }));
-          await supabase
-            .from("exam_sections")
-            .update({ task_config: JSON.stringify({ question_groups: groupsData }) })
-            .eq("id", sectionId);
+          try {
+            const groupsData = sectionGroups.map(g => ({
+              ...g,
+              section_id: sectionId // Update to real section ID
+            }));
+            await supabase
+              .from("exam_sections")
+              .update({ task_config: JSON.stringify({ question_groups: groupsData }) })
+              .eq("id", sectionId);
+          } catch (fallbackErr) {
+            warnings.push(`Groups fallback save failed: ${fallbackErr.message}`);
+          }
         }
       }
     }
 
-    // 5. Delete removed question groups
+    // 6. Delete removed question groups (non-blocking)
     if (deletedGroupIds && deletedGroupIds.length > 0) {
-      const { error: deleteGroupError } = await supabase
-        .from("listening_question_groups")
-        .delete()
-        .in("id", deletedGroupIds);
-      
-      if (deleteGroupError && deleteGroupError.code !== '42P01') {
-        console.warn("Failed to delete question groups:", deleteGroupError);
+      try {
+        const { error: deleteGroupError } = await supabase
+          .from("listening_question_groups")
+          .delete()
+          .in("id", deletedGroupIds);
+        
+        if (deleteGroupError && deleteGroupError.code !== '42P01') {
+          warnings.push(`Failed to delete question groups: ${deleteGroupError.message}`);
+        }
+      } catch (e) {
+        warnings.push(`Group deletion failed: ${e.message}`);
       }
     }
 
-    res.json({ 
+    // Return success with warnings if any
+    const response = { 
       message: "Exam structure saved successfully", 
       idMapping 
-    });
+    };
+    
+    if (warnings.length > 0) {
+      response.warnings = warnings;
+      console.log("Save completed with warnings:", warnings);
+    }
+    
+    res.json(response);
   } catch (err) {
     console.error("Save Structure Error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, warnings });
   }
 };
 
