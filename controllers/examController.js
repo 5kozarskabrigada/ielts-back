@@ -127,7 +127,7 @@ export const saveExamStructure = async (req, res) => {
         exam_id, created_at, is_deleted, 
         // Form/table completion fields
         is_info_row, row_order, label_text, info_text, question_template, answer_alternatives,
-        // Options for multiple choice
+        // Options for multiple choice (stored in question_data)
         option_a, option_b, option_c, option_d,
         // Group tracking
         group_id,
@@ -151,13 +151,15 @@ export const saveExamStructure = async (req, res) => {
           info_text: info_text || null,
           question_template: question_template || null,
           answer_alternatives: answer_alternatives || null,
-          // Options for multiple choice
-          option_a: option_a || null,
-          option_b: option_b || null,
-          option_c: option_c || null,
-          option_d: option_d || null,
-          // Store group_id in question_data for retrieval
-          question_data: { ...extraFields, group_id: group_id || null }
+          // Store options and group_id in question_data (option columns don't exist in DB)
+          question_data: { 
+            ...extraFields, 
+            group_id: group_id || null,
+            option_a: option_a || null,
+            option_b: option_b || null,
+            option_c: option_c || null,
+            option_d: option_d || null
+          }
         }
       };
     });
