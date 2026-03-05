@@ -707,6 +707,10 @@ export const getExam = async (req, res) => {
           })));
         }
         
+        console.log(`[GET] Final response: sections=${sections?.length}, questions=${sanitizedFallback?.length || 0}, groups=${questionGroups.length}`);
+        console.log(`[GET] Questions section_ids:`, sanitizedFallback?.map(q => q.section_id?.substring(0, 8)));
+        console.log(`[GET] Sections IDs:`, sections?.map(s => s.id?.substring(0, 8)));
+        
         return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups });
       }
       throw questionsError;
