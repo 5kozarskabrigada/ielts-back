@@ -10,16 +10,6 @@ export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
-  console.log(`[SaveExam] Received ${questions?.length || 0} questions, ${questionGroups?.length || 0} groups`);
-  if (questions?.length > 0) {
-    console.log(`[SaveExam] Questions:`, questions.map(q => ({
-      id: q.id,
-      section_id: q.section_id,
-      question_number: q.question_number,
-      group_id: q.group_id
-    })));
-  }
-
   const warnings = [];
   const idMapping = { sections: {}, questions: {}, groups: {} };
 
@@ -176,14 +166,6 @@ export const saveExamStructure = async (req, res) => {
 
     // Batch insert new questions
     if (newQuestions.length > 0) {
-      console.log(`Inserting ${newQuestions.length} new questions:`, newQuestions.map(q => ({
-        originalId: q.originalId,
-        section_id: q.payload.section_id,
-        question_number: q.payload.question_number,
-        question_type: q.payload.question_type,
-        group_id: q.payload.question_data?.group_id
-      })));
-      
       const { data: insertedQuestions, error: insertError } = await supabase
         .from("questions")
         .insert(newQuestions.map(q => q.payload))
@@ -195,7 +177,6 @@ export const saveExamStructure = async (req, res) => {
       }
       
       if (insertedQuestions) {
-        console.log(`Successfully inserted ${insertedQuestions.length} questions`);
         // Map old IDs to new IDs (by matching on question_number + section_id)
         insertedQuestions.forEach((inserted, idx) => {
           if (newQuestions[idx]) {
