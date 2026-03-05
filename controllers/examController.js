@@ -119,8 +119,12 @@ export const saveExamStructure = async (req, res) => {
 
     // 5. Process Questions - batch by new vs existing
     // First, map section IDs for all questions
+    console.log(`[SAVE] idMapping.sections:`, idMapping.sections);
+    console.log(`[SAVE] Processing ${questions.length} questions`);
+    
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
+      console.log(`[SAVE] Question section_id: ${q.section_id} -> ${mappedSectionId}`);
       const { 
         id, section_id, question_text, question_type, correct_answer, points, question_number, 
         exam_id, created_at, is_deleted, 
@@ -171,10 +175,20 @@ export const saveExamStructure = async (req, res) => {
 
     // Batch insert new questions
     if (newQuestions.length > 0) {
+      console.log(`[SAVE] Inserting ${newQuestions.length} new questions:`, newQuestions.map(q => ({
+        originalId: q.originalId?.substring(0, 15),
+        section_id: q.payload.section_id?.substring(0, 8),
+        qNum: q.payload.question_number
+      })));
+      
       const { data: insertedQuestions, error: insertError } = await supabase
         .from("questions")
         .insert(newQuestions.map(q => q.payload))
         .select();
+      
+      if (insertError) {
+        console.error(`[SAVE] Insert error:`, insertError);
+      }
       
       if (insertedQuestions) {
         // Map old IDs to new IDs (by matching on question_number + section_id)
