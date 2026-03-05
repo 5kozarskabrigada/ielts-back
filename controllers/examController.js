@@ -18,42 +18,13 @@ export const saveExamStructure = async (req, res) => {
   const idMapping = { sections: {}, questions: {}, groups: {} };
 
   try {
-    // 1. Update Exam Metadata + store question groups in modules_config (GUARANTEED fallback)
-    const modulesConfig = exam.modules_config || {};
-    if (questionGroups && questionGroups.length > 0) {
-      modulesConfig.listening_question_groups = questionGroups.map(g => ({
-        id: g.id,
-        section_id: g.section_id,
-        group_order: g.group_order || 1,
-        question_type: g.question_type,
-        question_range_start: g.question_range_start,
-        question_range_end: g.question_range_end,
-        instruction_text: g.instruction_text || null,
-        table_title: g.table_title || null,
-        table_data: g.table_data || null,
-        max_words: g.max_words || null,
-        max_numbers: g.max_numbers || null,
-        answer_format: g.answer_format || 'words_and_numbers',
-        has_example: g.has_example || false,
-        example_data: g.example_data || null,
-        audio_start_time: g.audio_start_time || null,
-        shared_options: g.shared_options || null,
-        image_url: g.image_url || null,
-        image_description: g.image_description || null,
-        layout_type: g.layout_type || null,
-        points_per_question: g.points_per_question || 1,
-        case_sensitive: g.case_sensitive || false,
-        spelling_tolerance: g.spelling_tolerance !== false
-      }));
-    }
-    
+    // 1. Update Exam Metadata first (WITHOUT question groups - we'll add them after section IDs are resolved)
     const { error: examError } = await supabase
       .from("exams")
       .update({
         title: exam.title,
         description: exam.description,
         status: exam.status,
-        modules_config: modulesConfig,
         code: exam.code,
         type: exam.type
       })
@@ -106,7 +77,47 @@ export const saveExamStructure = async (req, res) => {
       }
     }
 
-    // 4. Process Questions - batch by new vs existing
+    // 4. NOW save question groups to modules_config with MAPPED section IDs
+    const modulesConfig = exam.modules_config || {};
+    if (questionGroups && questionGroups.length > 0) {
+      modulesConfig.listening_question_groups = questionGroups.map(g => {
+        // Map section_id to real UUID if it was a temp ID
+        const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
+        return {
+          id: g.id,
+          section_id: mappedSectionId,
+          group_order: g.group_order || 1,
+          question_type: g.question_type,
+          question_range_start: g.question_range_start,
+          question_range_end: g.question_range_end,
+          instruction_text: g.instruction_text || null,
+          table_title: g.table_title || null,
+          table_data: g.table_data || null,
+          max_words: g.max_words || null,
+          max_numbers: g.max_numbers || null,
+          answer_format: g.answer_format || 'words_and_numbers',
+          has_example: g.has_example || false,
+          example_data: g.example_data || null,
+          audio_start_time: g.audio_start_time || null,
+          shared_options: g.shared_options || null,
+          image_url: g.image_url || null,
+          image_description: g.image_description || null,
+          layout_type: g.layout_type || null,
+          points_per_question: g.points_per_question || 1,
+          case_sensitive: g.case_sensitive || false,
+          spelling_tolerance: g.spelling_tolerance !== false
+        };
+      });
+      
+      // Update exam with mapped question groups
+      await supabase
+        .from("exams")
+        .update({ modules_config: modulesConfig })
+        .eq("id", examId);
+      console.log(`[SAVE] Saved ${modulesConfig.listening_question_groups.length} question groups to modules_config with mapped section IDs`);
+    }
+
+    // 5. Process Questions - batch by new vs existing
     // First, map section IDs for all questions
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
@@ -176,7 +187,7 @@ export const saveExamStructure = async (req, res) => {
       }
     }
 
-    // 5. Update task_config for listening sections (store groups there too as backup)
+    // 6. Update task_config for listening sections (store groups there too as backup)
     const listeningSections = sections.filter(s => s.module_type === 'listening');
     if (listeningSections.length > 0 && questionGroups?.length > 0) {
       await Promise.all(listeningSections.map(section => {
