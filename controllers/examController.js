@@ -10,10 +10,6 @@ export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
-  console.log(`\n========== SAVE START (OPTIMIZED) ==========`);
-  console.log(`[SAVE] Exam ID: ${examId}`);
-  console.log(`[SAVE] Sections: ${sections?.length || 0}, Questions: ${questions?.length || 0}, Groups: ${questionGroups?.length || 0}`);
-
   const warnings = [];
   const idMapping = { sections: {}, questions: {}, groups: {} };
 
@@ -31,7 +27,6 @@ export const saveExamStructure = async (req, res) => {
       .eq("id", examId);
 
     if (examError) throw new Error(`Failed to update exam: ${examError.message}`);
-    console.log(`[SAVE] Exam metadata saved`);
 
     // 2. Soft delete removed questions (single batch operation)
     if (deletedQuestionIds?.length > 0) {
@@ -54,7 +49,6 @@ export const saveExamStructure = async (req, res) => {
           audio_url: section.audio_url
         }).eq("id", section.id)
       ));
-      console.log(`[SAVE] Updated ${existingSections.length} existing sections`);
     }
 
     // Insert new sections (must be sequential to get IDs)
@@ -73,7 +67,6 @@ export const saveExamStructure = async (req, res) => {
         .single();
       if (newSection) {
         idMapping.sections[section.id] = newSection.id;
-        console.log(`[SAVE] New section: ${section.id} -> ${newSection.id}`);
       }
     }
 
@@ -114,17 +107,11 @@ export const saveExamStructure = async (req, res) => {
         .from("exams")
         .update({ modules_config: modulesConfig })
         .eq("id", examId);
-      console.log(`[SAVE] Saved ${modulesConfig.listening_question_groups.length} question groups to modules_config with mapped section IDs`);
     }
 
     // 5. Process Questions - batch by new vs existing
-    // First, map section IDs for all questions
-    console.log(`[SAVE] idMapping.sections:`, idMapping.sections);
-    console.log(`[SAVE] Processing ${questions.length} questions`);
-    
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
-      console.log(`[SAVE] Question section_id: ${q.section_id} -> ${mappedSectionId}`);
       const { 
         id, section_id, question_text, question_type, correct_answer, points, question_number, 
         exam_id, created_at, is_deleted, 
@@ -132,6 +119,8 @@ export const saveExamStructure = async (req, res) => {
         is_info_row, row_order, label_text, info_text, question_template, answer_alternatives,
         // Options for multiple choice
         option_a, option_b, option_c, option_d,
+        // Group tracking
+        group_id,
         ...extraFields 
       } = q;
       return {
@@ -157,7 +146,8 @@ export const saveExamStructure = async (req, res) => {
           option_b: option_b || null,
           option_c: option_c || null,
           option_d: option_d || null,
-          question_data: Object.keys(extraFields).length > 0 ? extraFields : null
+          // Store group_id in question_data for retrieval
+          question_data: { ...extraFields, group_id: group_id || null }
         }
       };
     });
@@ -170,24 +160,17 @@ export const saveExamStructure = async (req, res) => {
       await Promise.all(existingQuestions.map(q =>
         supabase.from("questions").update(q.payload).eq("id", q.originalId)
       ));
-      console.log(`[SAVE] Updated ${existingQuestions.length} existing questions`);
     }
 
     // Batch insert new questions
     if (newQuestions.length > 0) {
-      console.log(`[SAVE] Inserting ${newQuestions.length} new questions:`, newQuestions.map(q => ({
-        originalId: q.originalId?.substring(0, 15),
-        section_id: q.payload.section_id?.substring(0, 8),
-        qNum: q.payload.question_number
-      })));
-      
       const { data: insertedQuestions, error: insertError } = await supabase
         .from("questions")
         .insert(newQuestions.map(q => q.payload))
         .select();
       
       if (insertError) {
-        console.error(`[SAVE] Insert error:`, insertError);
+        console.error(`Insert error:`, insertError);
       }
       
       if (insertedQuestions) {
@@ -197,7 +180,6 @@ export const saveExamStructure = async (req, res) => {
             idMapping.questions[newQuestions[idx].originalId] = inserted.id;
           }
         });
-        console.log(`[SAVE] Inserted ${insertedQuestions.length} new questions`);
       }
     }
 
@@ -224,13 +206,11 @@ export const saveExamStructure = async (req, res) => {
         }
         return Promise.resolve();
       }));
-      console.log(`[SAVE] Updated task_config for ${listeningSections.length} listening sections`);
     }
 
-    console.log(`========== SAVE COMPLETE ==========\n`);
     res.json({ message: "Exam saved", idMapping, warnings: warnings.length > 0 ? warnings : undefined });
   } catch (err) {
-    console.error("[SAVE] Error:", err);
+    console.error("Save error:", err);
     res.status(500).json({ error: err.message, warnings });
   }
 };
@@ -586,8 +566,6 @@ export const getExam = async (req, res) => {
   const { id } = req.params;
   const { role } = req.user;
 
-  console.log(`\n========== GET EXAM ${id} ==========`);
-
   try {
     // Get exam details
     const { data: exam, error: examError } = await supabase
@@ -611,13 +589,6 @@ export const getExam = async (req, res) => {
       .select("*")
       .eq("exam_id", id)
       .order("section_order", { ascending: true });
-
-    console.log(`[GET] Sections loaded: ${sections?.length || 0}`);
-    if (sections) {
-      sections.forEach(s => {
-        console.log(`[GET] Section ${s.id}: type=${s.module_type}, task_config=${s.task_config ? 'present (' + s.task_config.substring(0, 100) + '...)' : 'NULL'}`);
-      });
-    }
 
     // Fetch questions (exclude deleted)
     const { data: questions, error: questionsError } = await supabase
@@ -644,8 +615,6 @@ export const getExam = async (req, res) => {
           return { ...rest, ...(question_data || {}) };
         }) || [];
         
-        console.log(`[GET] Questions loaded (fallback): ${mergedFallback.length}`);
-        
         const sanitizedFallback = role === "student"
           ? mergedFallback.map(q => {
               const { correct_answer, ...rest } = q;
@@ -666,50 +635,29 @@ export const getExam = async (req, res) => {
             .in("section_id", listeningSectionIds)
             .order("group_order", { ascending: true });
           
-          console.log(`[GET] Groups from table: ${groups?.length || 0}, error: ${groupsError?.message || 'none'}`);
-          
           if (!groupsError && groups?.length > 0) {
             questionGroups = groups;
           } else {
             // Fallback 1: read from section's task_config
-            console.log(`[GET] Falling back to task_config for groups`);
             for (const sec of listeningSections) {
-              console.log(`[GET] Section ${sec.id} task_config:`, sec.task_config ? 'present' : 'null');
               if (sec.task_config) {
                 try {
                   const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
                   if (config.question_groups) {
-                    console.log(`[GET] Found ${config.question_groups.length} groups in section ${sec.id}`);
                     questionGroups.push(...config.question_groups);
                   }
                 } catch (e) { 
-                  console.error(`[GET] Failed to parse task_config for section ${sec.id}:`, e.message);
+                  // Ignore parse errors
                 }
               }
             }
             
             // Fallback 2: read from exam's modules_config (GUARANTEED to exist)
             if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
-              console.log(`[GET] Falling back to modules_config for groups`);
               questionGroups = exam.modules_config.listening_question_groups;
-              console.log(`[GET] Found ${questionGroups.length} groups in modules_config`);
             }
           }
         }
-        
-        console.log(`[GET] Total question groups: ${questionGroups.length}`);
-        if (questionGroups.length > 0) {
-          console.log(`[GET] Groups:`, questionGroups.map(g => ({
-            id: g.id,
-            section_id: g.section_id,
-            type: g.question_type,
-            range: `${g.question_range_start}-${g.question_range_end}`
-          })));
-        }
-        
-        console.log(`[GET] Final response: sections=${sections?.length}, questions=${sanitizedFallback?.length || 0}, groups=${questionGroups.length}`);
-        console.log(`[GET] Questions section_ids:`, sanitizedFallback?.map(q => q.section_id?.substring(0, 8)));
-        console.log(`[GET] Sections IDs:`, sections?.map(s => s.id?.substring(0, 8)));
         
         return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups });
       }
@@ -722,8 +670,6 @@ export const getExam = async (req, res) => {
       // Spread question_data fields into the question object
       return { ...rest, ...(question_data || {}) };
     }) || [];
-
-    console.log(`[GET] Questions loaded: ${mergedQuestions.length}`);
 
     // Remove correct answers if student
     const sanitizedQuestions = role === "student"
@@ -746,43 +692,33 @@ export const getExam = async (req, res) => {
         .in("section_id", listeningSectionIds)
         .order("group_order", { ascending: true });
       
-      console.log(`[GET] Groups from table: ${groups?.length || 0}, error: ${groupsError?.message || 'none'}`);
-      
       if (!groupsError && groups?.length > 0) {
         questionGroups = groups;
       } else {
         // Fallback 1: read from section's task_config
-        console.log(`[GET] Falling back to task_config for groups`);
         for (const sec of listeningSections) {
-          console.log(`[GET] Section ${sec.id} task_config:`, sec.task_config ? 'present' : 'null');
           if (sec.task_config) {
             try {
               const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
               if (config.question_groups) {
-                console.log(`[GET] Found ${config.question_groups.length} groups in section ${sec.id}`);
                 questionGroups.push(...config.question_groups);
               }
             } catch (e) { 
-              console.error(`[GET] Failed to parse task_config for section ${sec.id}:`, e.message);
+              // Ignore parse errors
             }
           }
         }
         
         // Fallback 2: read from exam's modules_config (GUARANTEED to exist)
         if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
-          console.log(`[GET] Falling back to modules_config for groups`);
           questionGroups = exam.modules_config.listening_question_groups;
-          console.log(`[GET] Found ${questionGroups.length} groups in modules_config`);
         }
       }
     }
 
-    console.log(`[GET] Total question groups: ${questionGroups.length}`);
-    console.log(`========== GET COMPLETE ==========\n`);
-
     res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups });
   } catch (err) {
-    console.error(`[GET] Error:`, err);
+    console.error(`Get exam error:`, err);
     res.status(500).json({ error: err.message });
   }
 };
