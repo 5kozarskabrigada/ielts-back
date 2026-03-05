@@ -98,7 +98,9 @@ export const saveExamStructure = async (req, res) => {
           layout_type: g.layout_type || null,
           points_per_question: g.points_per_question || 1,
           case_sensitive: g.case_sensitive || false,
-          spelling_tolerance: g.spelling_tolerance !== false
+          spelling_tolerance: g.spelling_tolerance !== false,
+          summary_data: g.summary_data || null,
+          summary_title: g.summary_title || null
         };
       });
       
