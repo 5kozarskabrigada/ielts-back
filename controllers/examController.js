@@ -1,7 +1,28 @@
 // ... existing imports
 import { supabase } from "../supabaseClient.js";
+import { v4 as uuidv4 } from "uuid";
 
-// ... existing functions (listExams, createExam, getExam, etc.)
+// Upload passage image to Supabase Storage
+export const uploadPassageImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+    const ext = req.file.originalname.split('.').pop();
+    const filename = `reading/passages/${uuidv4()}.${ext}`;
+    // Upload to Supabase Storage (bucket: 'uploads')
+    const { data, error } = await supabase.storage.from("uploads").upload(filename, req.file.buffer, {
+      contentType: req.file.mimetype,
+      upsert: false
+    });
+    if (error) throw error;
+    // Get public URL
+    const { data: publicUrlData } = supabase.storage.from("uploads").getPublicUrl(filename);
+    res.json({ url: publicUrlData.publicUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
 // Helper to check if string is a valid UUID
 const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
@@ -46,7 +67,10 @@ export const saveExamStructure = async (req, res) => {
           section_order: section.section_order,
           title: section.title,
           content: section.content,
-          audio_url: section.audio_url
+          audio_url: section.audio_url,
+          image_url: section.image_url || null,
+          image_description: section.image_description || null,
+          letter: section.letter || null
         }).eq("id", section.id)
       ));
     }
@@ -61,7 +85,10 @@ export const saveExamStructure = async (req, res) => {
           section_order: section.section_order,
           title: section.title,
           content: section.content,
-          audio_url: section.audio_url
+          audio_url: section.audio_url,
+          image_url: section.image_url || null,
+          image_description: section.image_description || null,
+          letter: section.letter || null
         }])
         .select()
         .single();
@@ -114,16 +141,18 @@ export const saveExamStructure = async (req, res) => {
     // 5. Process Questions - batch by new vs existing
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
-      const { 
-        id, section_id, question_text, question_type, correct_answer, points, question_number, 
-        exam_id, created_at, is_deleted, 
+      const {
+        id, section_id, question_text, question_type, correct_answer, points, question_number,
+        exam_id, created_at, is_deleted,
         // Form/table completion fields
         is_info_row, row_order, label_text, info_text, question_template, answer_alternatives,
         // Options for multiple choice (stored in question_data)
         option_a, option_b, option_c, option_d,
         // Group tracking
         group_id,
-        ...extraFields 
+        // Reading passage linkage
+        passage_letter,
+        ...extraFields
       } = q;
       return {
         originalId: id,
@@ -131,6 +160,7 @@ export const saveExamStructure = async (req, res) => {
         payload: {
           exam_id: examId,
           section_id: mappedSectionId,
+          passage_letter: passage_letter || null,
           question_text: question_text || q.text || '',
           question_type: question_type || q.type || 'multiple_choice',
           correct_answer: correct_answer || q.answer || '',

@@ -9,6 +9,7 @@ import examRoutes from "./routes/examRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import classroomRoutes from "./routes/classroomRoutes.js";
 import gradingRoutes from "./routes/gradingRoutes.js";
+import uploadRoutes from "./routes/uploadRoutes.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -23,6 +24,7 @@ app.use("/api/exams", examRoutes);
 app.use("/api/admin", adminRoutes); // Protected by authMiddleware in router
 app.use("/api/classrooms", classroomRoutes); // Protected by authMiddleware in router
 app.use("/api/grading", gradingRoutes); // AI grading and admin overrides
+app.use("/api/upload", uploadRoutes); // Passage image upload endpoint
 
 // Health check
 app.get("/", (req, res) => {
