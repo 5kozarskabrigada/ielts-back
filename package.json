@@ -14,7 +14,8 @@
     "express": "^4.19.0",
     "jsonwebtoken": "^9.0.0",
     "multer": "^2.0.2",
-    "pg": "^8.18.0"
+    "pg": "^8.18.0",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
