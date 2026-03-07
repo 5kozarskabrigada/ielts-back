@@ -176,13 +176,14 @@ export const saveExamStructure = async (req, res) => {
     // 5. Process Questions - batch by new vs existing
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
+      const mappedGroupId = idMapping.groups[q.group_id] || q.group_id || null;
       const {
         id, section_id, question_text, question_type, correct_answer, points, question_number,
         exam_id, created_at, is_deleted,
         // Form/table completion fields
         is_info_row, row_order, label_text, info_text, question_template, answer_alternatives,
         // Options for multiple choice (stored in question_data)
-        option_a, option_b, option_c, option_d,
+        option_a, option_b, option_c, option_d, option_e,
         // Group tracking
         group_id,
         // Reading passage linkage
@@ -211,11 +212,12 @@ export const saveExamStructure = async (req, res) => {
           // Store options and group_id in question_data (option columns don't exist in DB)
           question_data: { 
             ...extraFields, 
-            group_id: group_id || null,
+            group_id: mappedGroupId,
             option_a: option_a || null,
             option_b: option_b || null,
             option_c: option_c || null,
-            option_d: option_d || null
+            option_d: option_d || null,
+            option_e: option_e || null
           }
         }
       };
