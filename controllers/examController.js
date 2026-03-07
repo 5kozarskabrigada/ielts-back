@@ -17,6 +17,23 @@ export const uploadPassageImage = async (req, res) => {
       return res.status(400).json({ error: "No file uploaded" });
     }
     
+    // Check if bucket exists, create if it doesn't
+    const bucketName = 'uploads';
+    const { data: buckets } = await supabase.storage.listBuckets();
+    const bucketExists = buckets?.some(b => b.name === bucketName);
+    
+    if (!bucketExists) {
+      console.log('[uploadPassageImage] Creating bucket:', bucketName);
+      const { error: createError } = await supabase.storage.createBucket(bucketName, {
+        public: true,
+        fileSizeLimit: 10485760 // 10MB
+      });
+      if (createError) {
+        console.error('[uploadPassageImage] Failed to create bucket:', createError);
+        return res.status(500).json({ error: 'Storage not configured. Please contact administrator.' });
+      }
+    }
+    
     const ext = req.file.originalname.split('.').pop();
     const filename = `reading/passages/${uuidv4()}.${ext}`;
     console.log('[uploadPassageImage] Uploading to:', filename);
