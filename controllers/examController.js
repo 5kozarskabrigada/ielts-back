@@ -5,21 +5,42 @@ import { v4 as uuidv4 } from "uuid";
 // Upload passage image to Supabase Storage
 export const uploadPassageImage = async (req, res) => {
   try {
+    console.log('[uploadPassageImage] Request received');
+    console.log('[uploadPassageImage] File:', req.file ? {
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    } : 'NO FILE');
+    
     if (!req.file) {
+      console.error('[uploadPassageImage] No file in request');
       return res.status(400).json({ error: "No file uploaded" });
     }
+    
     const ext = req.file.originalname.split('.').pop();
     const filename = `reading/passages/${uuidv4()}.${ext}`;
+    console.log('[uploadPassageImage] Uploading to:', filename);
+    
     // Upload to Supabase Storage (bucket: 'uploads')
     const { data, error } = await supabase.storage.from("uploads").upload(filename, req.file.buffer, {
       contentType: req.file.mimetype,
       upsert: false
     });
-    if (error) throw error;
+    
+    if (error) {
+      console.error('[uploadPassageImage] Supabase upload error:', error);
+      throw error;
+    }
+    
+    console.log('[uploadPassageImage] Upload successful:', data);
+    
     // Get public URL
     const { data: publicUrlData } = supabase.storage.from("uploads").getPublicUrl(filename);
+    console.log('[uploadPassageImage] Public URL:', publicUrlData.publicUrl);
+    
     res.json({ url: publicUrlData.publicUrl });
   } catch (err) {
+    console.error('[uploadPassageImage] Error:', err);
     res.status(500).json({ error: err.message });
   }
 };
