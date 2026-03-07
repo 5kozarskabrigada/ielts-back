@@ -71,7 +71,8 @@ export const saveExamStructure = async (req, res) => {
             audio_url: section.audio_url,
             image_url: section.image_url || null,
             image_description: section.image_description || null,
-            letter: section.letter || null
+            letter: section.letter || null,
+            instruction: section.instruction || null
           })
           .eq("id", section.id)
           .select();
@@ -102,7 +103,8 @@ export const saveExamStructure = async (req, res) => {
           audio_url: section.audio_url,
           image_url: section.image_url || null,
           image_description: section.image_description || null,
-          letter: section.letter || null
+          letter: section.letter || null,
+          instruction: section.instruction || null
         }])
         .select()
         .single();
