@@ -199,7 +199,7 @@ export const saveExamStructure = async (req, res) => {
         // Form/table completion fields
         is_info_row, row_order, label_text, info_text, question_template, answer_alternatives,
         // Options for multiple choice (stored in question_data)
-        option_a, option_b, option_c, option_d, option_e,
+        option_a, option_b, option_c, option_d, option_e, option_f, option_g, option_h,
         // Group tracking
         group_id,
         // Reading passage linkage (not used - remove from payload)
@@ -232,7 +232,10 @@ export const saveExamStructure = async (req, res) => {
             option_b: option_b || null,
             option_c: option_c || null,
             option_d: option_d || null,
-            option_e: option_e || null
+            option_e: option_e || null,
+            option_f: option_f || null,
+            option_g: option_g || null,
+            option_h: option_h || null
           }
         }
       };
