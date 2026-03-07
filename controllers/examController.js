@@ -31,6 +31,15 @@ export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
+  console.log(`\n${'='.repeat(80)}`);
+  console.log(`🔵 SAVE EXAM STRUCTURE CALLED - Exam ID: ${examId}`);
+  console.log(`📦 Payload summary:`);
+  console.log(`   - Title: ${exam?.title}`);
+  console.log(`   - Sections: ${sections?.length || 0}`);
+  console.log(`   - Questions: ${questions?.length || 0}`);
+  console.log(`   - Question Groups: ${questionGroups?.length || 0}`);
+  console.log(`${'='.repeat(80)}\n`);
+
   const warnings = [];
   const idMapping = { sections: {}, questions: {}, groups: {} };
 
