@@ -103,7 +103,19 @@ export const saveExamStructure = async (req, res) => {
         return { data, error };
       });
       
-      await Promise.all(updatePromises);
+      const updateResults = await Promise.all(updatePromises);
+      
+      // Check for any errors
+      const failedUpdates = updateResults.filter(r => r.error);
+      if (failedUpdates.length > 0) {
+        console.error(`❌ ${failedUpdates.length} section updates failed!`);
+        failedUpdates.forEach((r, idx) => {
+          console.error(`   Failed update details:`, r.error);
+        });
+        throw new Error(`Failed to update ${failedUpdates.length} sections`);
+      }
+      
+      console.log(`✅ All ${existingSections.length} existing sections updated successfully`);
     }
 
     // Insert new sections (must be sequential to get IDs)
