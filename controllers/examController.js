@@ -100,36 +100,71 @@ export const saveExamStructure = async (req, res) => {
     // 4. NOW save question groups to modules_config with MAPPED section IDs
     const modulesConfig = exam.modules_config || {};
     if (questionGroups && questionGroups.length > 0) {
-      modulesConfig.listening_question_groups = questionGroups.map(g => {
-        // Map section_id to real UUID if it was a temp ID
+      // Separate groups by module type based on their section
+      const listeningGroupIds = sections.filter(s => s.module_type === 'listening').map(s => idMapping.sections[s.id] || s.id);
+      const readingGroupIds = sections.filter(s => s.module_type === 'reading').map(s => idMapping.sections[s.id] || s.id);
+      
+      const listeningGroups = questionGroups.filter(g => {
         const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
-        return {
-          id: g.id,
-          section_id: mappedSectionId,
-          group_order: g.group_order || 1,
-          question_type: g.question_type,
-          question_range_start: g.question_range_start,
-          question_range_end: g.question_range_end,
-          instruction_text: g.instruction_text || null,
-          table_title: g.table_title || null,
-          table_data: g.table_data || null,
-          max_words: g.max_words || null,
-          max_numbers: g.max_numbers || null,
-          answer_format: g.answer_format || 'words_and_numbers',
-          has_example: g.has_example || false,
-          example_data: g.example_data || null,
-          audio_start_time: g.audio_start_time || null,
-          shared_options: g.shared_options || null,
-          image_url: g.image_url || null,
-          image_description: g.image_description || null,
-          layout_type: g.layout_type || null,
-          points_per_question: g.points_per_question || 1,
-          case_sensitive: g.case_sensitive || false,
-          spelling_tolerance: g.spelling_tolerance !== false,
-          summary_data: g.summary_data || null,
-          summary_title: g.summary_title || null
-        };
+        return listeningGroupIds.includes(mappedSectionId);
       });
+      
+      const readingGroups = questionGroups.filter(g => {
+        const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
+        return readingGroupIds.includes(mappedSectionId);
+      });
+      
+      // Save listening groups
+      if (listeningGroups.length > 0) {
+        modulesConfig.listening_question_groups = listeningGroups.map(g => {
+          const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
+          return {
+            id: g.id,
+            section_id: mappedSectionId,
+            group_order: g.group_order || 1,
+            question_type: g.question_type,
+            question_range_start: g.question_range_start,
+            question_range_end: g.question_range_end,
+            instruction_text: g.instruction_text || null,
+            table_title: g.table_title || null,
+            table_data: g.table_data || null,
+            max_words: g.max_words || null,
+            max_numbers: g.max_numbers || null,
+            answer_format: g.answer_format || 'words_and_numbers',
+            has_example: g.has_example || false,
+            example_data: g.example_data || null,
+            audio_start_time: g.audio_start_time || null,
+            shared_options: g.shared_options || null,
+            image_url: g.image_url || null,
+            image_description: g.image_description || null,
+            layout_type: g.layout_type || null,
+            points_per_question: g.points_per_question || 1,
+            case_sensitive: g.case_sensitive || false,
+            spelling_tolerance: g.spelling_tolerance !== false,
+            summary_data: g.summary_data || null,
+            summary_title: g.summary_title || null
+          };
+        });
+      }
+      
+      // Save reading groups
+      if (readingGroups.length > 0) {
+        modulesConfig.reading_question_groups = readingGroups.map(g => {
+          const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
+          return {
+            id: g.id,
+            section_id: mappedSectionId,
+            group_order: g.group_order || 1,
+            question_type: g.question_type,
+            question_range_start: g.question_range_start,
+            question_range_end: g.question_range_end,
+            instruction_text: g.instruction_text || null,
+            image_url: g.image_url || null,
+            image_description: g.image_description || null,
+            points_per_question: g.points_per_question || 1
+          };
+        });
+      }
       
       // Update exam with mapped question groups
       await supabase
@@ -657,8 +692,10 @@ export const getExam = async (req, res) => {
             })
           : mergedFallback;
 
-        // Fetch question groups for listening sections
+        // Fetch question groups for both listening and reading sections
         let questionGroups = [];
+        
+        // Listening groups
         const listeningSections = sections?.filter(s => s.module_type === 'listening') || [];
         const listeningSectionIds = listeningSections.map(s => s.id);
         
@@ -671,7 +708,7 @@ export const getExam = async (req, res) => {
             .order("group_order", { ascending: true });
           
           if (!groupsError && groups?.length > 0) {
-            questionGroups = groups;
+            questionGroups.push(...groups);
           } else {
             // Fallback 1: read from section's task_config
             for (const sec of listeningSections) {
@@ -687,10 +724,21 @@ export const getExam = async (req, res) => {
               }
             }
             
-            // Fallback 2: read from exam's modules_config (GUARANTEED to exist)
-            if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
-              questionGroups = exam.modules_config.listening_question_groups;
+            // Fallback 2: read from exam's modules_config
+            if (exam.modules_config?.listening_question_groups) {
+              questionGroups.push(...exam.modules_config.listening_question_groups);
             }
+          }
+        }
+        
+        // Reading groups
+        const readingSections = sections?.filter(s => s.module_type === 'reading') || [];
+        const readingSectionIds = readingSections.map(s => s.id);
+        
+        if (readingSectionIds.length > 0) {
+          // Reading groups are stored in modules_config
+          if (exam.modules_config?.reading_question_groups) {
+            questionGroups.push(...exam.modules_config.reading_question_groups);
           }
         }
         
@@ -714,8 +762,10 @@ export const getExam = async (req, res) => {
         })
       : mergedQuestions;
 
-    // Fetch question groups for listening sections
+    // Fetch question groups for both listening and reading sections
     let questionGroups = [];
+    
+    // Listening groups
     const listeningSections = sections?.filter(s => s.module_type === 'listening') || [];
     const listeningSectionIds = listeningSections.map(s => s.id);
     
@@ -728,7 +778,7 @@ export const getExam = async (req, res) => {
         .order("group_order", { ascending: true });
       
       if (!groupsError && groups?.length > 0) {
-        questionGroups = groups;
+        questionGroups.push(...groups);
       } else {
         // Fallback 1: read from section's task_config
         for (const sec of listeningSections) {
@@ -744,10 +794,21 @@ export const getExam = async (req, res) => {
           }
         }
         
-        // Fallback 2: read from exam's modules_config (GUARANTEED to exist)
-        if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
-          questionGroups = exam.modules_config.listening_question_groups;
+        // Fallback 2: read from exam's modules_config
+        if (exam.modules_config?.listening_question_groups) {
+          questionGroups.push(...exam.modules_config.listening_question_groups);
         }
+      }
+    }
+    
+    // Reading groups
+    const readingSections = sections?.filter(s => s.module_type === 'reading') || [];
+    const readingSectionIds = readingSections.map(s => s.id);
+    
+    if (readingSectionIds.length > 0) {
+      // Reading groups are stored in modules_config
+      if (exam.modules_config?.reading_question_groups) {
+        questionGroups.push(...exam.modules_config.reading_question_groups);
       }
     }
 
