@@ -202,7 +202,7 @@ export const saveExamStructure = async (req, res) => {
         option_a, option_b, option_c, option_d, option_e,
         // Group tracking
         group_id,
-        // Reading passage linkage
+        // Reading passage linkage (not used - remove from payload)
         passage_letter,
         ...extraFields
       } = q;
@@ -212,7 +212,6 @@ export const saveExamStructure = async (req, res) => {
         payload: {
           exam_id: examId,
           section_id: mappedSectionId,
-          passage_letter: passage_letter || null,
           question_text: question_text || q.text || '',
           question_type: question_type || q.type || 'multiple_choice',
           correct_answer: correct_answer || q.answer || '',
