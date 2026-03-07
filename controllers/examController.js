@@ -244,9 +244,19 @@ export const saveExamStructure = async (req, res) => {
 
     // Batch update existing questions (parallel)
     if (existingQuestions.length > 0) {
-      await Promise.all(existingQuestions.map(q =>
-        supabase.from("questions").update(q.payload).eq("id", q.originalId)
-      ));
+      const updateResults = await Promise.all(existingQuestions.map(async q => {
+        const { data, error } = await supabase.from("questions").update(q.payload).eq("id", q.originalId).select();
+        if (error) {
+          console.error(`Failed to update question ${q.originalId}:`, error);
+        }
+        return { data, error };
+      }));
+      
+      const failedQuestions = updateResults.filter(r => r.error);
+      if (failedQuestions.length > 0) {
+        console.error(`${failedQuestions.length} question updates failed`);
+        warnings.push(`Failed to update ${failedQuestions.length} questions`);
+      }
     }
 
     // Batch insert new questions
