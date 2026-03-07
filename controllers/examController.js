@@ -31,15 +31,6 @@ export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
 
-  console.log(`\n${'='.repeat(80)}`);
-  console.log(`🔵 SAVE EXAM STRUCTURE CALLED - Exam ID: ${examId}`);
-  console.log(`📦 Payload summary:`);
-  console.log(`   - Title: ${exam?.title}`);
-  console.log(`   - Sections: ${sections?.length || 0}`);
-  console.log(`   - Questions: ${questions?.length || 0}`);
-  console.log(`   - Question Groups: ${questionGroups?.length || 0}`);
-  console.log(`${'='.repeat(80)}\n`);
-
   const warnings = [];
   const idMapping = { sections: {}, questions: {}, groups: {} };
 
@@ -67,38 +58,23 @@ export const saveExamStructure = async (req, res) => {
     const existingSections = sections.filter(s => isUUID(s.id));
     const newSections = sections.filter(s => !isUUID(s.id));
 
-    console.log(`📊 SECTION UPDATE DEBUG:`);
-    console.log(`  Total sections: ${sections.length}`);
-    console.log(`  Existing sections: ${existingSections.length}`, existingSections.map(s => ({ id: s.id, module_type: s.module_type, title: s.title?.substring(0, 30) })));
-    console.log(`  New sections: ${newSections.length}`);
-
     // Batch update existing sections
     if (existingSections.length > 0) {
       const updatePromises = existingSections.map(async section => {
-        const updatePayload = {
-          exam_id: examId,
-          module_type: section.module_type,
-          section_order: section.section_order,
-          title: section.title,
-          content: section.content,
-          audio_url: section.audio_url,
-          image_url: section.image_url || null,
-          image_description: section.image_description || null,
-          letter: section.letter || null
-        };
-        
-        console.log(`  ⬆️  Updating section ${section.id} (${section.module_type}): title="${section.title?.substring(0, 30)}", content length=${section.content?.length || 0}`);
-        
         const { data, error } = await supabase.from("exam_sections")
-          .update(updatePayload)
+          .update({
+            exam_id: examId,
+            module_type: section.module_type,
+            section_order: section.section_order,
+            title: section.title,
+            content: section.content,
+            audio_url: section.audio_url,
+            image_url: section.image_url || null,
+            image_description: section.image_description || null,
+            letter: section.letter || null
+          })
           .eq("id", section.id)
           .select();
-        
-        if (error) {
-          console.error(`  ❌ Failed to update section ${section.id}:`, error);
-        } else {
-          console.log(`  ✅ Successfully updated section ${section.id}`, data);
-        }
         
         return { data, error };
       });
@@ -108,14 +84,9 @@ export const saveExamStructure = async (req, res) => {
       // Check for any errors
       const failedUpdates = updateResults.filter(r => r.error);
       if (failedUpdates.length > 0) {
-        console.error(`❌ ${failedUpdates.length} section updates failed!`);
-        failedUpdates.forEach((r, idx) => {
-          console.error(`   Failed update details:`, r.error);
-        });
-        throw new Error(`Failed to update ${failedUpdates.length} sections`);
+        console.error(`Failed to update ${failedUpdates.length} sections:`, failedUpdates[0].error);
+        throw new Error(`Failed to update ${failedUpdates.length} sections: ${failedUpdates[0].error.message}`);
       }
-      
-      console.log(`✅ All ${existingSections.length} existing sections updated successfully`);
     }
 
     // Insert new sections (must be sequential to get IDs)
