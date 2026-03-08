@@ -979,7 +979,7 @@ export const submitExam = async (req, res) => {
     // Fetch questions to grade
     const { data: questions } = await supabase
       .from("questions")
-      .select("id, correct_answer, points")
+      .select("id, correct_answer, answer_alternatives, points")
       .eq("exam_id", examId);
 
     let totalScore = 0;
@@ -992,10 +992,24 @@ export const submitExam = async (req, res) => {
       let score = 0;
 
       if (userAns !== undefined) {
-        // Simple string matching for MVP (case-insensitive)
-        if (String(userAns).trim().toLowerCase() === String(q.correct_answer).trim().toLowerCase()) {
+        const userAnswerLower = String(userAns).trim().toLowerCase();
+        const correctAnswerLower = String(q.correct_answer).trim().toLowerCase();
+        
+        // Check main correct answer
+        if (userAnswerLower === correctAnswerLower) {
           isCorrect = true;
           score = q.points || 1;
+        }
+        
+        // Check alternative answers if provided
+        if (!isCorrect && q.answer_alternatives && Array.isArray(q.answer_alternatives)) {
+          for (const alt of q.answer_alternatives) {
+            if (userAnswerLower === String(alt).trim().toLowerCase()) {
+              isCorrect = true;
+              score = q.points || 1;
+              break;
+            }
+          }
         }
       }
 
