@@ -267,7 +267,11 @@ export const saveExamStructure = async (req, res) => {
           label_text: label_text || null,
           info_text: info_text || null,
           question_template: question_template || null,
-          answer_alternatives: answer_alternatives || null,
+          answer_alternatives: answer_alternatives 
+            ? (typeof answer_alternatives === 'string' 
+                ? answer_alternatives.split('/').map(s => s.trim()).filter(Boolean) 
+                : answer_alternatives)
+            : null,
           // Store options and group_id in question_data (option columns don't exist in DB)
           question_data: { 
             ...extraFields, 
@@ -1002,12 +1006,19 @@ export const submitExam = async (req, res) => {
         }
         
         // Check alternative answers if provided
-        if (!isCorrect && q.answer_alternatives && Array.isArray(q.answer_alternatives)) {
-          for (const alt of q.answer_alternatives) {
-            if (userAnswerLower === String(alt).trim().toLowerCase()) {
-              isCorrect = true;
-              score = q.points || 1;
-              break;
+        if (!isCorrect && q.answer_alternatives) {
+          let alternatives = q.answer_alternatives;
+          // Handle both string and array formats
+          if (typeof alternatives === 'string') {
+            alternatives = alternatives.split('/').map(s => s.trim()).filter(Boolean);
+          }
+          if (Array.isArray(alternatives)) {
+            for (const alt of alternatives) {
+              if (userAnswerLower === String(alt).trim().toLowerCase()) {
+                isCorrect = true;
+                score = q.points || 1;
+                break;
+              }
             }
           }
         }
