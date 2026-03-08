@@ -40,7 +40,8 @@ export const getAllLogs = async (req, res) => {
         *,
         users:user_id (
           id,
-          full_name,
+          first_name,
+          last_name,
           email
         ),
         exams:exam_id (
@@ -62,7 +63,7 @@ export const getAllLogs = async (req, res) => {
       timestamp: log.timestamp,
       metadata: log.metadata,
       user_id: log.user_id,
-      user_name: log.users?.full_name,
+      user_name: log.users ? `${log.users.first_name} ${log.users.last_name}`.trim() : 'Unknown',
       user_email: log.users?.email,
       exam_id: log.exam_id,
       exam_title: log.exams?.title
@@ -86,7 +87,8 @@ export const getExamLogs = async (req, res) => {
         *,
         users:user_id (
           id,
-          full_name,
+          first_name,
+          last_name,
           email
         )
       `)
@@ -105,7 +107,7 @@ export const getExamLogs = async (req, res) => {
       timestamp: log.timestamp,
       metadata: log.metadata,
       user_id: log.user_id,
-      user_name: log.users?.full_name,
+      user_name: log.users ? `${log.users.first_name} ${log.users.last_name}`.trim() : 'Unknown',
       user_email: log.users?.email
     }));
 
@@ -125,7 +127,8 @@ export const getAllSubmissions = async (req, res) => {
         *,
         users:user_id (
           id,
-          full_name,
+          first_name,
+          last_name,
           email
         ),
         exams:exam_id (
@@ -159,7 +162,7 @@ export const getAllSubmissions = async (req, res) => {
     const formattedSubmissions = submissionsArray.map(sub => ({
       id: sub.id,
       user_id: sub.user_id,
-      user_name: sub.users?.full_name,
+      user_name: sub.users ? `${sub.users.first_name} ${sub.users.last_name}`.trim() : 'Unknown',
       user_email: sub.users?.email,
       exam_id: sub.exam_id,
       exam_title: sub.exams?.title,
@@ -195,7 +198,8 @@ export const getSubmissionDetails = async (req, res) => {
         *,
         users:user_id (
           id,
-          full_name,
+          first_name,
+          last_name,
           email
         ),
         exams:exam_id (
@@ -225,7 +229,7 @@ export const getSubmissionDetails = async (req, res) => {
 
     res.json({
       ...submission,
-      user_name: submission.users?.full_name,
+      user_name: submission.users ? `${submission.users.first_name} ${submission.users.last_name}`.trim() : 'Unknown',
       user_email: submission.users?.email,
       exam_title: submission.exams?.title,
       logs: logs || []
