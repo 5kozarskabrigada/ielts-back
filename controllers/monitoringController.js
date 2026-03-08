@@ -227,11 +227,66 @@ export const getSubmissionDetails = async (req, res) => {
       .eq('user_id', submission.user_id)
       .order('timestamp', { ascending: false });
 
+    // Get detailed answers with question and section information
+    const { data: answers } = await supabase
+      .from('answers')
+      .select(`
+        *,
+        questions!inner (
+          id,
+          question_number,
+          question_type,
+          correct_answer,
+          exam_sections!inner (
+            id,
+            title,
+            module_type,
+            section_order
+          )
+        )
+      `)
+      .eq('submission_id', id)
+      .order('questions.question_number', { ascending: true });
+
+    // Format answer details for frontend
+    const answerDetails = (answers || []).map(ans => ({
+      question_id: ans.question_id,
+      question_number: ans.questions.question_number,
+      question_type: ans.questions.question_type,
+      user_answer: ans.user_answer,
+      correct_answer: ans.questions.correct_answer,
+      is_correct: ans.is_correct,
+      score: ans.score,
+      module_type: ans.questions.exam_sections.module_type,
+      section_title: ans.questions.exam_sections.title,
+      section_order: ans.questions.exam_sections.section_order
+    }));
+
+    // Group answers by module with correct/wrong counts
+    const answersByModule = {
+      listening: { correct: 0, wrong: 0, answers: [] },
+      reading: { correct: 0, wrong: 0, answers: [] },
+      writing: { correct: 0, wrong: 0, answers: [] }
+    };
+
+    answerDetails.forEach(ans => {
+      if (answersByModule[ans.module_type]) {
+        answersByModule[ans.module_type].answers.push(ans);
+        if (ans.is_correct) {
+          answersByModule[ans.module_type].correct++;
+        } else {
+          answersByModule[ans.module_type].wrong++;
+        }
+      }
+    });
+
     res.json({
       ...submission,
       user_name: submission.users ? `${submission.users.first_name} ${submission.users.last_name}`.trim() : 'Unknown',
       user_email: submission.users?.email,
       exam_title: submission.exams?.title,
+      answers: answerDetails,
+      answers_by_module: answersByModule,
       logs: logs || []
     });
   } catch (error) {
