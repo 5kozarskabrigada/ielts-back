@@ -798,8 +798,8 @@ export const getExam = async (req, res) => {
               }
             }
             
-            // Fallback 2: read from exam's modules_config
-            if (exam.modules_config?.listening_question_groups) {
+            // Fallback 2: read from exam's modules_config (only if not already loaded from task_config)
+            if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
               questionGroups.push(...exam.modules_config.listening_question_groups);
             }
           }
@@ -816,7 +816,12 @@ export const getExam = async (req, res) => {
           }
         }
         
-        return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups });
+        // Deduplicate groups by ID
+        const uniqueGroups = Array.from(
+          new Map(questionGroups.map(g => [g.id, g])).values()
+        );
+
+        return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups: uniqueGroups });
       }
       throw questionsError;
     }
@@ -868,8 +873,8 @@ export const getExam = async (req, res) => {
           }
         }
         
-        // Fallback 2: read from exam's modules_config
-        if (exam.modules_config?.listening_question_groups) {
+        // Fallback 2: read from exam's modules_config (only if not already loaded from task_config)
+        if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
           questionGroups.push(...exam.modules_config.listening_question_groups);
         }
       }
@@ -886,7 +891,12 @@ export const getExam = async (req, res) => {
       }
     }
 
-    res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups });
+    // Deduplicate groups by ID
+    const uniqueGroups = Array.from(
+      new Map(questionGroups.map(g => [g.id, g])).values()
+    );
+
+    res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups: uniqueGroups });
   } catch (err) {
     console.error(`Get exam error:`, err);
     res.status(500).json({ error: err.message });
