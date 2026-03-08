@@ -227,6 +227,14 @@ export const getSubmissionDetails = async (req, res) => {
       .eq('user_id', submission.user_id)
       .order('timestamp', { ascending: false });
 
+    // Get violations for this submission
+    const { data: violations } = await supabase
+      .from('violations')
+      .select('*')
+      .eq('exam_id', submission.exam_id)
+      .eq('user_id', submission.user_id)
+      .order('occurred_at', { ascending: false });
+
     // Get detailed answers with question and section information
     const { data: answers } = await supabase
       .from('answers')
@@ -287,7 +295,8 @@ export const getSubmissionDetails = async (req, res) => {
       exam_title: submission.exams?.title,
       answers: answerDetails,
       answers_by_module: answersByModule,
-      logs: logs || []
+      logs: logs || [],
+      violations: violations || []
     });
   } catch (error) {
     console.error('Failed to fetch submission details:', error);
