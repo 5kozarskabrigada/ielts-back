@@ -148,6 +148,10 @@ export const saveExamStructure = async (req, res) => {
         }])
         .select()
         .single();
+      if (error) {
+        console.error(`Failed to insert section:`, error);
+        throw new Error(`Failed to insert section: ${error.message}`);
+      }
       if (newSection) {
         idMapping.sections[section.id] = newSection.id;
       }
