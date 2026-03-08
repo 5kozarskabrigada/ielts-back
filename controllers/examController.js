@@ -980,18 +980,36 @@ export const submitExam = async (req, res) => {
       return res.status(409).json({ error: "Already submitted" });
     }
 
-    // Fetch questions to grade
+    // Fetch questions with section info to grade
     const { data: questions } = await supabase
       .from("questions")
-      .select("id, correct_answer, answer_alternatives, points")
+      .select(`
+        id, 
+        correct_answer, 
+        answer_alternatives, 
+        points,
+        question_number,
+        question_type,
+        exam_sections!inner (
+          id,
+          module_type,
+          title
+        )
+      `)
       .eq("exam_id", examId);
 
     let totalScore = 0;
     let totalPoints = 0;
     const gradedAnswers = [];
+    const moduleScores = {
+      listening: { correct: 0, total: 0 },
+      reading: { correct: 0, total: 0 },
+      writing: { correct: 0, total: 0 }
+    };
 
     questions.forEach(q => {
       const userAns = answers[q.id];
+      const moduleType = q.exam_sections.module_type;
       let isCorrect = false;
       let score = 0;
 
@@ -1027,15 +1045,38 @@ export const submitExam = async (req, res) => {
       totalScore += score;
       totalPoints += (q.points || 1);
 
+      // Track module-wise scores
+      if (moduleScores[moduleType]) {
+        moduleScores[moduleType].total += (q.points || 1);
+        if (isCorrect) {
+          moduleScores[moduleType].correct += score;
+        }
+      }
+
       gradedAnswers.push({
         question_id: q.id,
+        question_number: q.question_number,
+        section_id: q.exam_sections.id,
+        section_title: q.exam_sections.title,
+        module_type: moduleType,
         user_answer: userAns,
+        correct_answer: q.correct_answer,
         is_correct: isCorrect,
         score
       });
     });
 
+    // Calculate band scores for each module
+    const scoresByModule = {};
+    Object.keys(moduleScores).forEach(module => {
+      if (moduleScores[module].total > 0) {
+        const percentage = (moduleScores[module].correct / moduleScores[module].total);
+        scoresByModule[module] = Math.round(percentage * 9 * 2) / 2; // Round to nearest 0.5
+      }
+    });
+
     const overallBand = totalPoints > 0 ? (totalScore / totalPoints) * 9 : 0;
+    const roundedBand = Math.round(overallBand * 2) / 2; // Round to nearest 0.5
 
     // Create submission
     const { data: submission, error: subError } = await supabase
@@ -1044,10 +1085,12 @@ export const submitExam = async (req, res) => {
         {
           user_id: userId,
           exam_id: examId,
-          scores_by_module: {}, 
-          overall_band_score: overallBand,
+          scores_by_module: scoresByModule, 
+          band_score: roundedBand,
+          overall_band_score: roundedBand,
           total_correct: totalScore,
           total_questions: questions.length,
+          time_spent: Object.values(time_spent_by_module || {}).reduce((a, b) => a + b, 0),
           time_spent_by_module,
           status: "submitted",
           submitted_at: new Date(),
@@ -1058,7 +1101,7 @@ export const submitExam = async (req, res) => {
 
     if (subError) throw subError;
 
-    // Store answers
+    // Store answers with detailed info
     const answerRecords = gradedAnswers.map(a => ({
       submission_id: submission.id,
       question_id: a.question_id,
@@ -1073,7 +1116,12 @@ export const submitExam = async (req, res) => {
 
     if (ansError) throw ansError;
 
-    res.json({ message: "Exam submitted successfully", score: overallBand });
+    res.json({ 
+      message: "Exam submitted successfully", 
+      score: roundedBand,
+      scores_by_module: scoresByModule,
+      submission_id: submission.id
+    });
 
   } catch (err) {
     res.status(500).json({ error: err.message });
