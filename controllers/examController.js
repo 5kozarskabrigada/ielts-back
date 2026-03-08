@@ -1129,6 +1129,106 @@ export const updateAccessCode = async (req, res) => {
     if (error) throw error;
     res.json({ message: "Access code updated", exam: data });
   } catch (err) {
+    console.error("Update access code error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Verify exam code for student join
+export const verifyExamCode = async (req, res) => {
+  const { code } = req.body;
+  const userId = req.user.id;
+
+  if (!code || code.length < 4) {
+    return res.status(400).json({ error: "Invalid exam code" });
+  }
+
+  try {
+    // Find exam by access code
+    const { data: exam, error: examError } = await supabase
+      .from("exams")
+      .select("id, title, status, duration_minutes")
+      .eq("access_code", code.toUpperCase())
+      .single();
+
+    if (examError || !exam) {
+      return res.status(404).json({ error: "Invalid exam code or exam not found" });
+    }
+
+    if (exam.status !== "active") {
+      return res.status(403).json({ error: "This exam is not currently active" });
+    }
+
+    // Log student joining
+    await supabase
+      .from("monitoring_logs")
+      .insert([{
+        exam_id: exam.id,
+        user_id: userId,
+        event_type: "joined",
+        metadata: { code_used: code.toUpperCase() }
+      }]);
+
+    res.json({ 
+      examId: exam.id, 
+      title: exam.title,
+      duration: exam.duration_minutes 
+    });
+  } catch (err) {
+    console.error("Verify exam code error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Auto-save student answers during exam
+export const autosaveAnswers = async (req, res) => {
+  const { id: examId } = req.params;
+  const userId = req.user.id;
+  const { answers, module, timestamp } = req.body;
+
+  try {
+    // Store in a temporary autosave table or update existing submission draft
+    const { data, error } = await supabase
+      .from("exam_autosaves")
+      .upsert([{
+        exam_id: examId,
+        user_id: userId,
+        answers_data: answers,
+        current_module: module,
+        last_updated: timestamp || new Date().toISOString()
+      }], {
+        onConflict: 'exam_id,user_id'
+      })
+      .select();
+
+    if (error) throw error;
+    res.json({ message: "Autosaved", timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error("Autosave error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Log exam events (start, module completion, etc.)
+export const logExamEvent = async (req, res) => {
+  const { id: examId } = req.params;
+  const userId = req.user.id;
+  const { event_type, metadata } = req.body;
+
+  try {
+    await supabase
+      .from("monitoring_logs")
+      .insert([{
+        exam_id: examId,
+        user_id: userId,
+        event_type,
+        metadata: metadata || {},
+        timestamp: new Date().toISOString()
+      }]);
+
+    res.json({ message: "Logged" });
+  } catch (err) {
+    console.error("Log event error:", err);
     res.status(500).json({ error: err.message });
   }
 };
