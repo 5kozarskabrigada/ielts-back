@@ -38,22 +38,25 @@ export const getAllLogs = async (req, res) => {
       .from('monitoring_logs')
       .select(`
         *,
-        users!monitoring_logs_user_id_fkey (
+        users:user_id (
           id,
           full_name,
           email
         ),
-        exams!monitoring_logs_exam_id_fkey (
+        exams:exam_id (
           id,
           title
         )
       `)
       .order('timestamp', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase error fetching logs:', error);
+      throw error;
+    }
 
-    // Format the response
-    const formattedLogs = logs.map(log => ({
+    // Format the response - handle potentially null data
+    const formattedLogs = (logs || []).map(log => ({
       id: log.id,
       event_type: log.event_type,
       timestamp: log.timestamp,
@@ -68,7 +71,7 @@ export const getAllLogs = async (req, res) => {
     res.json(formattedLogs);
   } catch (error) {
     console.error('Failed to fetch logs:', error);
-    res.status(500).json({ error: 'Failed to fetch logs' });
+    res.status(500).json({ error: error.message || 'Failed to fetch logs' });
   }
 };
 
@@ -81,7 +84,7 @@ export const getExamLogs = async (req, res) => {
       .from('monitoring_logs')
       .select(`
         *,
-        users!monitoring_logs_user_id_fkey (
+        users:user_id (
           id,
           full_name,
           email
@@ -90,10 +93,13 @@ export const getExamLogs = async (req, res) => {
       .eq('exam_id', examId)
       .order('timestamp', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase error fetching exam logs:', error);
+      throw error;
+    }
 
     // Format the response
-    const formattedLogs = logs.map(log => ({
+    const formattedLogs = (logs || []).map(log => ({
       id: log.id,
       event_type: log.event_type,
       timestamp: log.timestamp,
@@ -106,7 +112,7 @@ export const getExamLogs = async (req, res) => {
     res.json(formattedLogs);
   } catch (error) {
     console.error('Failed to fetch exam logs:', error);
-    res.status(500).json({ error: 'Failed to fetch exam logs' });
+    res.status(500).json({ error: error.message || 'Failed to fetch exam logs' });
   }
 };
 
@@ -117,34 +123,40 @@ export const getAllSubmissions = async (req, res) => {
       .from('exam_submissions')
       .select(`
         *,
-        users!exam_submissions_user_id_fkey (
+        users:user_id (
           id,
           full_name,
           email
         ),
-        exams!exam_submissions_exam_id_fkey (
+        exams:exam_id (
           id,
           title
         )
       `)
       .order('submitted_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase error fetching submissions:', error);
+      throw error;
+    }
+
+    // Handle potentially null data
+    const submissionsArray = submissions || [];
 
     // Calculate stats
-    const totalSubmissions = submissions.length;
-    const avgBandScore = submissions.length > 0
-      ? (submissions.reduce((sum, s) => sum + (s.band_score || 0), 0) / submissions.length).toFixed(1)
+    const totalSubmissions = submissionsArray.length;
+    const avgBandScore = submissionsArray.length > 0
+      ? (submissionsArray.reduce((sum, s) => sum + (s.band_score || 0), 0) / submissionsArray.length).toFixed(1)
       : 0;
     
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-    const thisWeekCount = submissions.filter(s => new Date(s.submitted_at) > oneWeekAgo).length;
+    const thisWeekCount = submissionsArray.filter(s => new Date(s.submitted_at) > oneWeekAgo).length;
 
-    const activeExams = new Set(submissions.map(s => s.exam_id)).size;
+    const activeExams = new Set(submissionsArray.map(s => s.exam_id)).size;
 
     // Format submissions
-    const formattedSubmissions = submissions.map(sub => ({
+    const formattedSubmissions = submissionsArray.map(sub => ({
       id: sub.id,
       user_id: sub.user_id,
       user_name: sub.users?.full_name,
@@ -168,7 +180,7 @@ export const getAllSubmissions = async (req, res) => {
     });
   } catch (error) {
     console.error('Failed to fetch submissions:', error);
-    res.status(500).json({ error: 'Failed to fetch submissions' });
+    res.status(500).json({ error: error.message || 'Failed to fetch submissions' });
   }
 };
 
@@ -181,12 +193,12 @@ export const getSubmissionDetails = async (req, res) => {
       .from('exam_submissions')
       .select(`
         *,
-        users!exam_submissions_user_id_fkey (
+        users:user_id (
           id,
           full_name,
           email
         ),
-        exams!exam_submissions_exam_id_fkey (
+        exams:exam_id (
           id,
           title
         )
@@ -194,7 +206,14 @@ export const getSubmissionDetails = async (req, res) => {
       .eq('id', id)
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase error fetching submission details:', error);
+      throw error;
+    }
+
+    if (!submission) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
 
     // Get associated logs for this submission
     const { data: logs } = await supabase
@@ -213,6 +232,6 @@ export const getSubmissionDetails = async (req, res) => {
     });
   } catch (error) {
     console.error('Failed to fetch submission details:', error);
-    res.status(500).json({ error: 'Failed to fetch submission details' });
+    res.status(500).json({ error: error.message || 'Failed to fetch submission details' });
   }
 };
