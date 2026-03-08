@@ -34,7 +34,8 @@ export const logViolation = async (req, res) => {
 // Get all logs for admin
 export const getAllLogs = async (req, res) => {
   try {
-    const { data: logs, error } = await supabase
+    // Fetch from monitoring_logs table
+    const { data: logs, error: logsError } = await supabase
       .from('monitoring_logs')
       .select(`
         *,
@@ -51,12 +52,35 @@ export const getAllLogs = async (req, res) => {
       `)
       .order('timestamp', { ascending: false });
 
-    if (error) {
-      console.error('Supabase error fetching logs:', error);
-      throw error;
+    if (logsError) {
+      console.error('Supabase error fetching logs:', logsError);
+      throw logsError;
     }
 
-    // Format the response - handle potentially null data
+    // Fetch from violations table
+    const { data: violations, error: violationsError } = await supabase
+      .from('violations')
+      .select(`
+        *,
+        users:user_id (
+          id,
+          first_name,
+          last_name,
+          email
+        ),
+        exams:exam_id (
+          id,
+          title
+        )
+      `)
+      .order('occurred_at', { ascending: false });
+
+    if (violationsError) {
+      console.error('Supabase error fetching violations:', violationsError);
+      // Don't throw, just log and continue with empty violations
+    }
+
+    // Format monitoring_logs
     const formattedLogs = (logs || []).map(log => ({
       id: log.id,
       event_type: log.event_type,
@@ -69,7 +93,24 @@ export const getAllLogs = async (req, res) => {
       exam_title: log.exams?.title
     }));
 
-    res.json(formattedLogs);
+    // Format violations as logs
+    const formattedViolations = (violations || []).map(violation => ({
+      id: violation.id,
+      event_type: violation.violation_type, // Use violation_type as event_type
+      timestamp: violation.occurred_at, // Map occurred_at to timestamp for consistency
+      metadata: violation.metadata,
+      user_id: violation.user_id,
+      user_name: violation.users ? `${violation.users.first_name} ${violation.users.last_name}`.trim() : 'Unknown',
+      user_email: violation.users?.email,
+      exam_id: violation.exam_id,
+      exam_title: violation.exams?.title
+    }));
+
+    // Combine both arrays and sort by timestamp
+    const allLogs = [...formattedLogs, ...formattedViolations]
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    res.json(allLogs);
   } catch (error) {
     console.error('Failed to fetch logs:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch logs' });
