@@ -157,9 +157,18 @@ export const saveExamStructure = async (req, res) => {
       }
     }
 
-    // 4. NOW save question groups to modules_config with MAPPED section IDs
+    // 4. NOW save question groups to modules_config with MAPPED section IDs and generate UUIDs for temp groups
     const modulesConfig = exam.modules_config || {};
     if (questionGroups && questionGroups.length > 0) {
+      // Generate real UUIDs for any temp groups
+      questionGroups.forEach(g => {
+        if (g.id && g.id.toString().startsWith('temp_group_')) {
+          const realGroupId = uuidv4();
+          idMapping.groups[g.id] = realGroupId;
+          g.id = realGroupId; // Replace temp ID with real UUID
+        }
+      });
+      
       // Separate groups by module type based on their section
       const listeningGroupIds = sections.filter(s => s.module_type === 'listening').map(s => idMapping.sections[s.id] || s.id);
       const readingGroupIds = sections.filter(s => s.module_type === 'reading').map(s => idMapping.sections[s.id] || s.id);
@@ -179,7 +188,7 @@ export const saveExamStructure = async (req, res) => {
         modulesConfig.listening_question_groups = listeningGroups.map(g => {
           const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
           return {
-            id: g.id,
+            id: g.id, // Now contains real UUID
             section_id: mappedSectionId,
             group_order: g.group_order || 1,
             question_type: g.question_type,
@@ -212,7 +221,7 @@ export const saveExamStructure = async (req, res) => {
         modulesConfig.reading_question_groups = readingGroups.map(g => {
           const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
           return {
-            id: g.id,
+            id: g.id, // Now contains real UUID
             section_id: mappedSectionId,
             group_order: g.group_order || 1,
             question_type: g.question_type,
