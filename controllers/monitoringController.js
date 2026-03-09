@@ -277,16 +277,18 @@ export const getSubmissionDetails = async (req, res) => {
       .order('occurred_at', { ascending: false });
 
     // Get detailed answers with question and section information
-    const { data: answers } = await supabase
+    const { data: answers, error: answersError } = await supabase
       .from('answers')
       .select(`
         *,
-        questions!inner (
+        questions (
           id,
           question_number,
           question_type,
+          question_text,
           correct_answer,
-          exam_sections!inner (
+          question_data,
+          exam_sections (
             id,
             title,
             module_type,
@@ -295,21 +297,39 @@ export const getSubmissionDetails = async (req, res) => {
         )
       `)
       .eq('submission_id', id)
-      .order('questions.question_number', { ascending: true });
+      .order('created_at', { ascending: true });
+
+    if (answersError) {
+      console.error('Error fetching answers:', answersError);
+    }
 
     // Format answer details for frontend
-    const answerDetails = (answers || []).map(ans => ({
-      question_id: ans.question_id,
-      question_number: ans.questions.question_number,
-      question_type: ans.questions.question_type,
-      user_answer: ans.user_answer,
-      correct_answer: ans.questions.correct_answer,
-      is_correct: ans.is_correct,
-      score: ans.score,
-      module_type: ans.questions.exam_sections.module_type,
-      section_title: ans.questions.exam_sections.title,
-      section_order: ans.questions.exam_sections.section_order
-    }));
+    const answerDetails = (answers || [])
+      .filter(ans => ans.questions) // Skip if question was deleted and join returned null
+      .map(ans => ({
+        question_id: ans.question_id,
+        question_number: ans.questions.question_number,
+        question_type: ans.questions.question_type,
+        question_text: ans.questions.question_text || '',
+        user_answer: ans.user_answer,
+        correct_answer: ans.questions.correct_answer,
+        is_correct: ans.is_correct,
+        score: ans.score,
+        module_type: ans.questions.exam_sections?.module_type || 'unknown',
+        section_title: ans.questions.exam_sections?.title || 'Unknown',
+        section_order: ans.questions.exam_sections?.section_order || 0,
+        options: ans.questions.question_data || {}
+      }))
+      .sort((a, b) => {
+        // Sort by module order (listening first, then reading, then writing)
+        const moduleOrder = { listening: 0, reading: 1, writing: 2 };
+        const moduleDiff = (moduleOrder[a.module_type] || 99) - (moduleOrder[b.module_type] || 99);
+        if (moduleDiff !== 0) return moduleDiff;
+        // Then by section order
+        if (a.section_order !== b.section_order) return a.section_order - b.section_order;
+        // Then by question number
+        return a.question_number - b.question_number;
+      });
 
     // Group answers by module with correct/wrong counts
     const answersByModule = {

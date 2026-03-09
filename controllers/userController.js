@@ -108,7 +108,7 @@ export const deleteUser = async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Soft delete
+    // Soft delete user
     const { data, error } = await supabase
       .from("users")
       .update({ is_deleted: true, is_active: false })
@@ -117,6 +117,10 @@ export const deleteUser = async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Also soft-handle submissions: mark them so they don't clutter results
+    // (actual deletion happens in permanentlyDeleteUser)
+    
     res.json({ message: "User deleted successfully", user: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -169,6 +173,25 @@ export const permanentlyDeleteUser = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Get all submission IDs for this user
+    const { data: submissions } = await supabase
+      .from("exam_submissions")
+      .select("id")
+      .eq("user_id", id);
+
+    const submissionIds = (submissions || []).map(s => s.id);
+
+    // Delete answers linked to user's submissions
+    if (submissionIds.length > 0) {
+      await supabase.from("answers").delete().in("submission_id", submissionIds);
+      await supabase.from("writing_responses").delete().in("submission_id", submissionIds);
+    }
+
+    // Delete submissions, violations, and monitoring logs
+    await supabase.from("exam_submissions").delete().eq("user_id", id);
+    await supabase.from("violations").delete().eq("user_id", id);
+    await supabase.from("monitoring_logs").delete().eq("user_id", id);
+
     // Permanently delete user from database
     const { error } = await supabase
       .from("users")
