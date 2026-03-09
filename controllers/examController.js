@@ -969,18 +969,24 @@ export const submitExam = async (req, res) => {
 
   try {
     // Check if already submitted
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from("exam_submissions")
       .select("id")
       .eq("exam_id", examId)
       .eq("user_id", userId)
       .single();
+    
+    if (existingError && existingError.code !== 'PGRST116') {
+      // PGRST116 = not found (expected), other errors are real problems
+      console.error('Error checking existing submission:', existingError);
+      throw existingError;
+    }
 
     // If already submitted, allow update (for resubmission case)
     const isUpdate = !!existing;
 
-    // Fetch questions with section info to grade
-    const { data: questions } = await supabase
+    // Fetch questions with section info to grade - include question_data for group_id
+    const { data: questions, error: questionsError } = await supabase
       .from("questions")
       .select(`
         id, 
@@ -989,13 +995,24 @@ export const submitExam = async (req, res) => {
         points,
         question_number,
         question_type,
+        question_data,
         exam_sections!inner (
           id,
           module_type,
           title
         )
       `)
-      .eq("exam_id", examId);
+      .eq("exam_id", examId)
+      .neq("is_deleted", true);
+    
+    if (questionsError) {
+      console.error('Error fetching questions:', questionsError);
+      throw questionsError;
+    }
+    
+    if (!questions || questions.length === 0) {
+      return res.status(400).json({ error: "No questions found for this exam" });
+    }
 
     let totalScore = 0;
     let totalPoints = 0;
@@ -1007,62 +1024,67 @@ export const submitExam = async (req, res) => {
     };
 
     questions.forEach(q => {
-      const userAns = answers[q.id];
-      const moduleType = q.exam_sections.module_type;
-      let isCorrect = false;
-      let score = 0;
+      try {
+        const userAns = answers[q.id];
+        const moduleType = q.exam_sections?.module_type || 'unknown';
+        let isCorrect = false;
+        let score = 0;
 
-      if (userAns !== undefined) {
-        const userAnswerLower = String(userAns).trim().toLowerCase();
-        const correctAnswerLower = String(q.correct_answer).trim().toLowerCase();
-        
-        // Check main correct answer
-        if (userAnswerLower === correctAnswerLower) {
-          isCorrect = true;
-          score = q.points || 1;
-        }
-        
-        // Check alternative answers if provided
-        if (!isCorrect && q.answer_alternatives) {
-          let alternatives = q.answer_alternatives;
-          // Handle both string and array formats
-          if (typeof alternatives === 'string') {
-            alternatives = alternatives.split('/').map(s => s.trim()).filter(Boolean);
+        if (userAns !== undefined && userAns !== null && userAns !== '') {
+          const userAnswerLower = String(userAns).trim().toLowerCase();
+          const correctAnswerLower = q.correct_answer ? String(q.correct_answer).trim().toLowerCase() : '';
+          
+          // Check main correct answer
+          if (correctAnswerLower && userAnswerLower === correctAnswerLower) {
+            isCorrect = true;
+            score = q.points || 1;
           }
-          if (Array.isArray(alternatives)) {
-            for (const alt of alternatives) {
-              if (userAnswerLower === String(alt).trim().toLowerCase()) {
-                isCorrect = true;
-                score = q.points || 1;
-                break;
+          
+          // Check alternative answers if provided
+          if (!isCorrect && q.answer_alternatives) {
+            let alternatives = q.answer_alternatives;
+            // Handle both string and array formats
+            if (typeof alternatives === 'string') {
+              alternatives = alternatives.split('/').map(s => s.trim()).filter(Boolean);
+            }
+            if (Array.isArray(alternatives)) {
+              for (const alt of alternatives) {
+                if (alt && userAnswerLower === String(alt).trim().toLowerCase()) {
+                  isCorrect = true;
+                  score = q.points || 1;
+                  break;
+                }
               }
             }
           }
         }
-      }
 
-      totalScore += score;
-      totalPoints += (q.points || 1);
+        totalScore += score;
+        totalPoints += (q.points || 1);
 
-      // Track module-wise scores
-      if (moduleScores[moduleType]) {
-        moduleScores[moduleType].total += (q.points || 1);
-        if (isCorrect) {
-          moduleScores[moduleType].correct += score;
+        // Track module-wise scores
+        if (moduleType && moduleScores[moduleType]) {
+          moduleScores[moduleType].total += (q.points || 1);
+          if (isCorrect) {
+            moduleScores[moduleType].correct += score;
+          }
         }
-      }
 
-      gradedAnswers.push({
-        question_id: q.id,
-        question_number: q.question_number,
-        section_id: q.exam_sections.id,
-        section_title: q.exam_sections.title,
-        module_type: moduleType,
-        user_answer: userAns,
-        correct_answer: q.correct_answer,
-        is_correct: isCorrect,
-        score
-      });
+        gradedAnswers.push({
+          question_id: q.id,
+          question_number: q.question_number,
+          section_id: q.exam_sections?.id || null,
+          section_title: q.exam_sections?.title || 'Unknown Section',
+          module_type: moduleType,
+          user_answer: userAns,
+          correct_answer: q.correct_answer,
+          is_correct: isCorrect,
+          score
+        });
+      } catch (err) {
+        console.error(`Error grading question ${q.id}:`, err);
+        // Continue processing other questions
+      }
     });
 
     // Calculate band scores for each module
@@ -1071,6 +1093,8 @@ export const submitExam = async (req, res) => {
       if (moduleScores[module].total > 0) {
         const percentage = (moduleScores[module].correct / moduleScores[module].total);
         scoresByModule[module] = Math.round(percentage * 9 * 2) / 2; // Round to nearest 0.5
+      } else {
+        scoresByModule[module] = 0;
       }
     });
 
@@ -1098,14 +1122,22 @@ export const submitExam = async (req, res) => {
         .select()
         .single();
       
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error('Error updating submission:', updateError);
+        throw updateError;
+      }
       submission = updatedSubmission;
       
       // Delete old answers
-      await supabase
+      const { error: deleteError } = await supabase
         .from("answers")
         .delete()
         .eq("submission_id", existing.id);
+      
+      if (deleteError) {
+        console.error('Error deleting old answers:', deleteError);
+        // Continue anyway - new answers will be inserted
+      }
     } else {
       // Create new submission
       const { data: newSubmission, error: insertError } = await supabase
@@ -1128,7 +1160,10 @@ export const submitExam = async (req, res) => {
         .select()
         .single();
       
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error('Error inserting submission:', insertError);
+        throw insertError;
+      }
       submission = newSubmission;
     }
 
@@ -1141,11 +1176,16 @@ export const submitExam = async (req, res) => {
       score: a.score
     }));
 
-    const { error: ansError } = await supabase
-      .from("answers")
-      .insert(answerRecords);
+    if (answerRecords.length > 0) {
+      const { error: ansError } = await supabase
+        .from("answers")
+        .insert(answerRecords);
 
-    if (ansError) throw ansError;
+      if (ansError) {
+        console.error('Error inserting answers:', ansError);
+        throw ansError;
+      }
+    }
 
     res.json({ 
       message: "Exam submitted successfully", 
