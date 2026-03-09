@@ -976,9 +976,8 @@ export const submitExam = async (req, res) => {
       .eq("user_id", userId)
       .single();
 
-    if (existing) {
-      return res.status(409).json({ error: "Already submitted" });
-    }
+    // If already submitted, allow update (for resubmission case)
+    const isUpdate = !!existing;
 
     // Fetch questions with section info to grade
     const { data: questions } = await supabase
@@ -1078,13 +1077,13 @@ export const submitExam = async (req, res) => {
     const overallBand = totalPoints > 0 ? (totalScore / totalPoints) * 9 : 0;
     const roundedBand = Math.round(overallBand * 2) / 2; // Round to nearest 0.5
 
-    // Create submission
-    const { data: submission, error: subError } = await supabase
-      .from("exam_submissions")
-      .insert([
-        {
-          user_id: userId,
-          exam_id: examId,
+    // Create or update submission
+    let submission;
+    if (isUpdate) {
+      // Update existing submission
+      const { data: updatedSubmission, error: updateError } = await supabase
+        .from("exam_submissions")
+        .update({
           scores_by_module: scoresByModule, 
           band_score: roundedBand,
           overall_band_score: roundedBand,
@@ -1094,12 +1093,44 @@ export const submitExam = async (req, res) => {
           time_spent_by_module,
           status: "submitted",
           submitted_at: new Date(),
-        },
-      ])
-      .select()
-      .single();
-
-    if (subError) throw subError;
+        })
+        .eq("id", existing.id)
+        .select()
+        .single();
+      
+      if (updateError) throw updateError;
+      submission = updatedSubmission;
+      
+      // Delete old answers
+      await supabase
+        .from("answers")
+        .delete()
+        .eq("submission_id", existing.id);
+    } else {
+      // Create new submission
+      const { data: newSubmission, error: insertError } = await supabase
+        .from("exam_submissions")
+        .insert([
+          {
+            user_id: userId,
+            exam_id: examId,
+            scores_by_module: scoresByModule, 
+            band_score: roundedBand,
+            overall_band_score: roundedBand,
+            total_correct: totalScore,
+            total_questions: questions.length,
+            time_spent: Object.values(time_spent_by_module || {}).reduce((a, b) => a + b, 0),
+            time_spent_by_module,
+            status: "submitted",
+            submitted_at: new Date(),
+          },
+        ])
+        .select()
+        .single();
+      
+      if (insertError) throw insertError;
+      submission = newSubmission;
+    }
 
     // Store answers with detailed info
     const answerRecords = gradedAnswers.map(a => ({
