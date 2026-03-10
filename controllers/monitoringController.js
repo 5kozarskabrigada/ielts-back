@@ -209,7 +209,10 @@ export const getAllSubmissions = async (req, res) => {
       exam_title: sub.exams?.title,
       submitted_at: sub.submitted_at,
       band_score: sub.band_score,
-      answers: sub.answers,
+      scores_by_module: sub.scores_by_module || {},
+      total_correct: sub.total_correct || 0,
+      total_questions: sub.total_questions || 0,
+      status: sub.status || 'submitted',
       time_spent: sub.time_spent
     }));
 
@@ -349,6 +352,13 @@ export const getSubmissionDetails = async (req, res) => {
       }
     });
 
+    // Get writing responses for this submission
+    const { data: writingResponses } = await supabase
+      .from('writing_responses')
+      .select('*')
+      .eq('submission_id', id)
+      .order('task_number', { ascending: true });
+
     res.json({
       ...submission,
       user_name: submission.users ? `${submission.users.first_name} ${submission.users.last_name}`.trim() : 'Unknown',
@@ -356,6 +366,7 @@ export const getSubmissionDetails = async (req, res) => {
       exam_title: submission.exams?.title,
       answers: answerDetails,
       answers_by_module: answersByModule,
+      writing_responses: writingResponses || [],
       logs: logs || [],
       violations: violations || []
     });
