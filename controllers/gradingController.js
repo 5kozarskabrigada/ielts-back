@@ -12,8 +12,8 @@ export const gradeWritingWithAI = async (req, res) => {
     return res.status(500).json({ error: "GEMINI_API_KEY not configured on server" });
   }
 
-  if (!responseText || responseText.trim().length < 50) {
-    return res.status(400).json({ error: "Response text too short for grading" });
+  if (!responseText || responseText.trim().length === 0) {
+    return res.status(400).json({ error: "No response text provided" });
   }
 
   const wordCount = responseText.trim().split(/\s+/).length;
