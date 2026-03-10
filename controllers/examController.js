@@ -1032,36 +1032,62 @@ export const submitExam = async (req, res) => {
       writing: { correct: 0, total: 0 }
     };
 
+    // Helper: normalize multi-select answers to sorted uppercase letters
+    const normalizeMultiAnswer = (val) => {
+      if (!val) return '';
+      const str = String(val).trim().toUpperCase();
+      // If slash-separated (e.g. "A/C/D"), split on slashes
+      if (str.includes('/')) {
+        return str.split('/').map(s => s.trim()).filter(Boolean).sort().join(',');
+      }
+      // If just concatenated letters (e.g. "ACD"), split each char
+      if (/^[A-Z]+$/.test(str)) {
+        return str.split('').sort().join(',');
+      }
+      return str.toLowerCase();
+    };
+
     questions.forEach(q => {
       try {
         const userAns = answers[q.id];
         const moduleType = q.exam_sections?.module_type || 'unknown';
+        const qType = q.question_type || '';
         let isCorrect = false;
         let score = 0;
 
         if (userAns !== undefined && userAns !== null && userAns !== '') {
-          const userAnswerLower = String(userAns).trim().toLowerCase();
-          const correctAnswerLower = q.correct_answer ? String(q.correct_answer).trim().toLowerCase() : '';
-          
-          // Check main correct answer
-          if (correctAnswerLower && userAnswerLower === correctAnswerLower) {
-            isCorrect = true;
-            score = q.points || 1;
-          }
-          
-          // Check alternative answers if provided
-          if (!isCorrect && q.answer_alternatives) {
-            let alternatives = q.answer_alternatives;
-            // Handle both string and array formats
-            if (typeof alternatives === 'string') {
-              alternatives = alternatives.split('/').map(s => s.trim()).filter(Boolean);
+          // For multiple choice multiple, compare as sorted sets
+          if (qType === 'multiple_choice_multiple') {
+            const userNorm = normalizeMultiAnswer(userAns);
+            const correctNorm = normalizeMultiAnswer(q.correct_answer);
+            if (userNorm && correctNorm && userNorm === correctNorm) {
+              isCorrect = true;
+              score = q.points || 1;
             }
-            if (Array.isArray(alternatives)) {
-              for (const alt of alternatives) {
-                if (alt && userAnswerLower === String(alt).trim().toLowerCase()) {
-                  isCorrect = true;
-                  score = q.points || 1;
-                  break;
+          } else {
+            const userAnswerLower = String(userAns).trim().toLowerCase();
+            const correctAnswerLower = q.correct_answer ? String(q.correct_answer).trim().toLowerCase() : '';
+            
+            // Check main correct answer
+            if (correctAnswerLower && userAnswerLower === correctAnswerLower) {
+              isCorrect = true;
+              score = q.points || 1;
+            }
+            
+            // Check alternative answers if provided
+            if (!isCorrect && q.answer_alternatives) {
+              let alternatives = q.answer_alternatives;
+              // Handle both string and array formats
+              if (typeof alternatives === 'string') {
+                alternatives = alternatives.split('/').map(s => s.trim()).filter(Boolean);
+              }
+              if (Array.isArray(alternatives)) {
+                for (const alt of alternatives) {
+                  if (alt && userAnswerLower === String(alt).trim().toLowerCase()) {
+                    isCorrect = true;
+                    score = q.points || 1;
+                    break;
+                  }
                 }
               }
             }
@@ -1117,6 +1143,7 @@ export const submitExam = async (req, res) => {
       const { data: updatedSubmission, error: updateError } = await supabase
         .from("exam_submissions")
         .update({
+          answers: answers,
           scores_by_module: scoresByModule, 
           band_score: roundedBand,
           overall_band_score: roundedBand,
@@ -1155,6 +1182,7 @@ export const submitExam = async (req, res) => {
           {
             user_id: userId,
             exam_id: examId,
+            answers: answers,
             scores_by_module: scoresByModule, 
             band_score: roundedBand,
             overall_band_score: roundedBand,
