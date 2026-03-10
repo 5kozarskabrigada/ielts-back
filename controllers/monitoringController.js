@@ -359,10 +359,20 @@ export const getSubmissionDetails = async (req, res) => {
       .eq('submission_id', id)
       .order('task_number', { ascending: true });
 
-    // Fallback: if no writing_responses exist, extract essays from the raw submission answers JSON
+    // Get writing sections for this exam to know how many tasks there should be
+    const { data: writingSections } = await supabase
+      .from('exam_sections')
+      .select('id, section_order, title, task_config')
+      .eq('exam_id', submission.exam_id)
+      .eq('module_type', 'writing')
+      .order('section_order', { ascending: true });
+
+    const expectedTasks = writingSections?.length || 0;
     let finalWritingResponses = writingResponses || [];
-    if (finalWritingResponses.length === 0) {
-      // Try submission.answers first, then fall back to autosave
+
+    // If we don't have all expected writing tasks, fill in missing ones from raw answers
+    if (finalWritingResponses.length < expectedTasks) {
+      // Get raw answers
       let rawAnswers = null;
       if (submission.answers && typeof submission.answers === 'object' && Object.keys(submission.answers).length > 0) {
         rawAnswers = submission.answers;
@@ -382,21 +392,17 @@ export const getSubmissionDetails = async (req, res) => {
       }
 
       if (rawAnswers && typeof rawAnswers === 'object') {
-        const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task_'));
-        if (writingKeys.length > 0) {
-          // Get writing sections for context
-          const { data: writingSections } = await supabase
-            .from('exam_sections')
-            .select('id, section_order, title, task_config')
-            .eq('exam_id', submission.exam_id)
-            .eq('module_type', 'writing')
-            .order('section_order', { ascending: true });
-
-          finalWritingResponses = writingKeys.sort().map((key, idx) => {
-            const taskNumber = parseInt(key.replace('writing_task_', ''), 10);
+        const existingTaskNumbers = new Set(finalWritingResponses.map(wr => wr.task_number));
+        
+        // For each expected task, check if we have it; if not, add from raw
+        for (let taskIdx = 0; taskIdx < expectedTasks; taskIdx++) {
+          const taskNumber = taskIdx + 1;
+          if (!existingTaskNumbers.has(taskNumber)) {
+            const key = `writing_task_${taskNumber}`;
             const essayText = rawAnswers[key] || '';
-            const section = writingSections?.[idx];
-            return {
+            const section = writingSections[taskIdx];
+            
+            finalWritingResponses.push({
               id: `raw-${taskNumber}`,
               submission_id: id,
               section_id: section?.id || null,
@@ -412,9 +418,12 @@ export const getSubmissionDetails = async (req, res) => {
               ai_feedback: null,
               admin_override_band: null,
               admin_feedback: null,
-            };
-          });
+            });
+          }
         }
+        
+        // Sort by task number
+        finalWritingResponses.sort((a, b) => a.task_number - b.task_number);
       }
     }
 
