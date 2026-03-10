@@ -4,7 +4,7 @@ import { supabase } from "../supabaseClient.js";
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-// Grade writing response using Gemini AI
+// Grade writing response using Groq AI
 export const gradeWritingWithAI = async (req, res) => {
   const { submissionId, sectionId, taskNumber, responseText, taskType, taskPrompt, modelAnswer } = req.body;
 
@@ -21,15 +21,15 @@ export const gradeWritingWithAI = async (req, res) => {
   const minWords = isTask1 ? 150 : 250;
 
   try {
-    // Construct the AI prompt
-    const systemPrompt = `You are an expert IELTS examiner. Grade the following IELTS Writing ${isTask1 ? 'Task 1' : 'Task 2'} response.
+    // Construct the AI prompt with detailed IELTS criteria
+    const systemPrompt = `You are an expert IELTS examiner with years of experience grading writing tasks. Grade the following IELTS Writing ${isTask1 ? 'Task 1' : 'Task 2'} response strictly according to the official IELTS 9-band descriptors.
 
-TASK TYPE: ${taskType || (isTask1 ? 'Academic Report' : 'Essay')}
+TASK TYPE: ${taskType || (isTask1 ? 'Academic Report/Letter' : 'Discursive Essay')}
 
 TASK PROMPT:
 ${taskPrompt || 'Not provided'}
 
-${modelAnswer ? `MODEL ANSWER (for reference, do not share with student):
+${modelAnswer ? `MODEL ANSWER (for reference only):
 ${modelAnswer}` : ''}
 
 STUDENT'S RESPONSE:
@@ -37,22 +37,39 @@ ${responseText}
 
 WORD COUNT: ${wordCount} (minimum required: ${minWords})
 
-Grade this response on each of the 4 IELTS criteria using the IELTS 9-band scale:
-1. Task Response (TR) - How well did the student address all parts of the task?
-2. Coherence and Cohesion (CC) - How well organized and connected is the writing?
-3. Lexical Resource (LR) - Range and accuracy of vocabulary
-4. Grammatical Range and Accuracy (GRA) - Range and accuracy of grammar
+${isTask1 ? `
+TASK 1 GRADING CRITERIA:
+- Task Achievement (TA): Does the response cover all requirements of the task? Is there a clear overview? Are key features selected and adequately described? Is data/information appropriately selected and reported?
+- Coherence and Cohesion (CC): Is information logically organized? Are paragraphing and cohesive devices used effectively? Is there a clear progression throughout?
+- Lexical Resource (LR): Is there a sufficient range of vocabulary? Are less common words used with awareness of style and collocation? Are there errors in word choice/spelling?
+- Grammatical Range and Accuracy (GRA): Is there a range of sentence structures? Are complex structures attempted? How frequent/impactful are the grammatical errors?
+` : `
+TASK 2 GRADING CRITERIA:
+- Task Response (TR): Does the response address all parts of the task? Is a clear position presented throughout? Are ideas extended, supported and well-developed? Are relevant examples given?
+- Coherence and Cohesion (CC): Is there a logical structure with clear progression? Is each paragraph focused on a central topic? Are cohesive devices used accurately and appropriately?
+- Lexical Resource (LR): Is there a wide range of vocabulary? Are less common lexical items used skillfully? Are there errors in word formation/spelling?
+- Grammatical Range and Accuracy (GRA): Is there a variety of complex structures? Are grammar and punctuation generally well-controlled? Do errors impede communication?
+`}
 
-Respond ONLY with a JSON object in this exact format (no markdown, no explanation outside JSON):
+IMPORTANT NOTES:
+- If the word count is below the minimum (${minWords}), penalize the Task Response/Achievement score directly (typically -1 band or more).
+- Be fair but rigorous. A Band 9 is near-perfect; a Band 5 is modest; below Band 4 indicates serious problems.
+- Give specific, actionable feedback referencing actual phrases/sentences from the essay.
+
+Respond ONLY with a valid JSON object (no markdown code blocks, no extra text):
 {
-  "task_response": <score 0-9>,
-  "coherence_cohesion": <score 0-9>,
-  "lexical_resource": <score 0-9>,
-  "grammatical_range": <score 0-9>,
-  "overall_band": <average of above 4 scores, rounded to nearest 0.5>,
-  "feedback": "<2-3 paragraphs of constructive feedback including strengths and areas for improvement>",
+  "task_response": <number 0-9, can use 0.5 increments>,
+  "task_response_feedback": "<Specific feedback for ${isTask1 ? 'Task Achievement' : 'Task Response'} with examples from the text>",
+  "coherence_cohesion": <number 0-9, can use 0.5 increments>,
+  "coherence_feedback": "<Specific feedback for Coherence & Cohesion with examples>",
+  "lexical_resource": <number 0-9, can use 0.5 increments>,
+  "lexical_feedback": "<Specific feedback for Lexical Resource with examples>",
+  "grammatical_range": <number 0-9, can use 0.5 increments>,
+  "grammar_feedback": "<Specific feedback for Grammar with examples of errors found>",
+  "overall_band": <average of above 4, rounded to nearest 0.5>,
+  "overall_feedback": "<1-2 paragraph summary of strengths and main weaknesses>",
   "word_count_penalty": <true if under minimum, false otherwise>,
-  "key_improvements": ["<improvement 1>", "<improvement 2>", "<improvement 3>"]
+  "key_improvements": ["<specific improvement 1>", "<specific improvement 2>", "<specific improvement 3>"]
 }`;
 
     const response = await fetch(GROQ_API_URL, {
@@ -97,18 +114,42 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
     }
 
     // Save to database if submission context provided
-    if (submissionId && sectionId) {
-      const { data: existingResponse } = await supabase
+    if (submissionId) {
+      // If sectionId is missing, look it up from the exam
+      let resolvedSectionId = sectionId;
+      if (!resolvedSectionId) {
+        const { data: sub } = await supabase
+          .from("exam_submissions")
+          .select("exam_id")
+          .eq("id", submissionId)
+          .single();
+        if (sub?.exam_id) {
+          const { data: sections } = await supabase
+            .from("exam_sections")
+            .select("id, section_order")
+            .eq("exam_id", sub.exam_id)
+            .eq("module_type", "writing")
+            .order("section_order", { ascending: true });
+          if (sections && sections.length > 0) {
+            // Match by task number (task 1 = first writing section, task 2 = second, etc.)
+            resolvedSectionId = sections[(taskNumber || 1) - 1]?.id || sections[0]?.id;
+          }
+        }
+      }
+
+      // Try to find existing response by submission + task_number (more reliable than section_id)
+      let existingId = null;
+      const { data: existByTask } = await supabase
         .from("writing_responses")
         .select("id")
         .eq("submission_id", submissionId)
-        .eq("section_id", sectionId)
         .eq("task_number", taskNumber)
-        .single();
+        .maybeSingle();
+      if (existByTask) existingId = existByTask.id;
 
       const writeData = {
         submission_id: submissionId,
-        section_id: sectionId,
+        section_id: resolvedSectionId || null,
         task_number: taskNumber,
         response_text: responseText,
         word_count: wordCount,
@@ -118,7 +159,11 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
         ai_lexical_score: grading.lexical_resource,
         ai_grammar_score: grading.grammatical_range,
         ai_feedback: JSON.stringify({
-          feedback: grading.feedback,
+          feedback: grading.overall_feedback || grading.feedback,
+          task_response_feedback: grading.task_response_feedback,
+          coherence_feedback: grading.coherence_feedback,
+          lexical_feedback: grading.lexical_feedback,
+          grammar_feedback: grading.grammar_feedback,
           key_improvements: grading.key_improvements,
           word_count_penalty: grading.word_count_penalty
         }),
@@ -126,11 +171,11 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
         final_band: grading.overall_band
       };
 
-      if (existingResponse) {
+      if (existingId) {
         await supabase
           .from("writing_responses")
           .update(writeData)
-          .eq("id", existingResponse.id);
+          .eq("id", existingId);
       } else {
         await supabase
           .from("writing_responses")
@@ -152,7 +197,11 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
         coherence_cohesion: grading.coherence_cohesion,
         lexical_resource: grading.lexical_resource,
         grammatical_range: grading.grammatical_range,
-        feedback: grading.feedback,
+        feedback: grading.overall_feedback || grading.feedback,
+        task_response_feedback: grading.task_response_feedback,
+        coherence_feedback: grading.coherence_feedback,
+        lexical_feedback: grading.lexical_feedback,
+        grammar_feedback: grading.grammar_feedback,
         key_improvements: grading.key_improvements,
         word_count: wordCount,
         word_count_penalty: grading.word_count_penalty
