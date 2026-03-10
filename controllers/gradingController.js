@@ -1,15 +1,19 @@
 import { supabase } from "../supabaseClient.js";
 
-// Gemini AI Grading for Writing Section
+// AI Grading for Writing Section - supports Groq (free) or Gemini
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+const AI_PROVIDER = GROQ_API_KEY ? "groq" : "gemini";
+const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 // Grade writing response using Gemini AI
 export const gradeWritingWithAI = async (req, res) => {
   const { submissionId, sectionId, taskNumber, responseText, taskType, taskPrompt, modelAnswer } = req.body;
 
-  if (!GEMINI_API_KEY) {
-    return res.status(500).json({ error: "GEMINI_API_KEY not configured on server" });
+  if (!GROQ_API_KEY && !GEMINI_API_KEY) {
+    return res.status(500).json({ error: "No AI API key configured. Set GROQ_API_KEY or GEMINI_API_KEY on the server." });
   }
 
   if (!responseText || responseText.trim().length === 0) {
@@ -55,30 +59,62 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
   "key_improvements": ["<improvement 1>", "<improvement 2>", "<improvement 3>"]
 }`;
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{ text: systemPrompt }]
-        }],
-        generationConfig: {
+    let textContent;
+
+    if (AI_PROVIDER === "groq") {
+      // --- Groq API (OpenAI-compatible) ---
+      const response = await fetch(GROQ_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: "You are an expert IELTS examiner. Always respond with valid JSON only, no markdown." },
+            { role: "user", content: systemPrompt }
+          ],
           temperature: 0.3,
-          maxOutputTokens: 2048,
-        }
-      })
-    });
+          max_tokens: 2048,
+        })
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      console.error("Gemini API Error:", errorData);
-      return res.status(500).json({ error: "AI grading service unavailable: " + (errorData.error?.message || JSON.stringify(errorData)) });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error("Groq API Error:", errorData);
+        return res.status(500).json({ error: "AI grading service unavailable: " + (errorData.error?.message || JSON.stringify(errorData)) });
+      }
+
+      const aiResult = await response.json();
+      textContent = aiResult.choices?.[0]?.message?.content;
+    } else {
+      // --- Gemini API ---
+      const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{ text: systemPrompt }]
+          }],
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 2048,
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error("Gemini API Error:", errorData);
+        return res.status(500).json({ error: "AI grading service unavailable: " + (errorData.error?.message || JSON.stringify(errorData)) });
+      }
+
+      const aiResult = await response.json();
+      textContent = aiResult.candidates?.[0]?.content?.parts?.[0]?.text;
     }
-
-    const aiResult = await response.json();
-    const textContent = aiResult.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!textContent) {
       return res.status(500).json({ error: "Invalid response from AI service" });
