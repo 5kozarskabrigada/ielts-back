@@ -1047,6 +1047,22 @@ export const submitExam = async (req, res) => {
       return str.toLowerCase();
     };
 
+    // Helper: parse multi-select answer into array of letters
+    const parseMultiAnswerArray = (val) => {
+      if (!val) return [];
+      const str = String(val).trim().toUpperCase();
+      if (str.includes('/')) {
+        return str.split('/').map(s => s.trim()).filter(Boolean);
+      }
+      if (str.includes(',')) {
+        return str.split(',').map(s => s.trim()).filter(Boolean);
+      }
+      if (/^[A-Z]+$/.test(str)) {
+        return str.split('');
+      }
+      return [str];
+    };
+
     questions.forEach(q => {
       try {
         const userAns = answers[q.id];
@@ -1054,16 +1070,23 @@ export const submitExam = async (req, res) => {
         const qType = q.question_type || '';
         let isCorrect = false;
         let score = 0;
+        let pointsForQuestion = q.points || 1;
 
         if (userAns !== undefined && userAns !== null && userAns !== '') {
-          // For multiple choice multiple, compare as sorted sets
+          // For multiple choice multiple, count each correct answer separately
           if (qType === 'multiple_choice_multiple') {
-            const userNorm = normalizeMultiAnswer(userAns);
-            const correctNorm = normalizeMultiAnswer(q.correct_answer);
-            if (userNorm && correctNorm && userNorm === correctNorm) {
-              isCorrect = true;
-              score = q.points || 1;
-            }
+            const userSelections = parseMultiAnswerArray(userAns);
+            const correctAnswers = parseMultiAnswerArray(q.correct_answer);
+            
+            // Award 1 point per correct selection
+            const correctCount = userSelections.filter(sel => correctAnswers.includes(sel)).length;
+            score = correctCount;
+            
+            // Consider fully correct if all user selections are correct AND they got all of them
+            isCorrect = (correctCount === correctAnswers.length && userSelections.length === correctAnswers.length);
+            
+            // The question is worth N points where N = number of correct answers
+            pointsForQuestion = correctAnswers.length;
           } else {
             const userAnswerLower = String(userAns).trim().toLowerCase();
             const correctAnswerLower = q.correct_answer ? String(q.correct_answer).trim().toLowerCase() : '';
@@ -1095,12 +1118,12 @@ export const submitExam = async (req, res) => {
         }
 
         totalScore += score;
-        totalPoints += (q.points || 1);
+        totalPoints += pointsForQuestion;
 
         // Track module-wise scores
         if (moduleType && moduleScores[moduleType]) {
-          moduleScores[moduleType].total += (q.points || 1);
-          if (isCorrect) {
+          moduleScores[moduleType].total += pointsForQuestion;
+          if (score > 0) {
             moduleScores[moduleType].correct += score;
           }
         }
