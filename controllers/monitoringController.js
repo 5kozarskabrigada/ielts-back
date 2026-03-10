@@ -386,7 +386,7 @@ export const getSubmissionDetails = async (req, res) => {
       .eq('module_type', 'writing')
       .order('section_order', { ascending: true });
 
-    // Build complete list: start with DB records, add missing tasks from raw answers
+    // Build complete list: start with DB records, add missing tasks from raw answers or sections
     const finalWritingResponses = [];
     const existingTaskNumbers = new Set((writingResponses || []).map(wr => wr.task_number));
     
@@ -397,9 +397,9 @@ export const getSubmissionDetails = async (req, res) => {
 
     // Check for missing tasks in raw answers
     if (rawAnswers && typeof rawAnswers === 'object') {
-      const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task'));
+      const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task_'));
       for (const key of writingKeys) {
-        const taskNumber = parseInt(key.replace('writing_task', ''), 10);
+        const taskNumber = parseInt(key.replace('writing_task_', ''), 10);
         if (!existingTaskNumbers.has(taskNumber)) {
           const essayText = rawAnswers[key] || '';
           const section = writingSections?.find(s => s.section_order === taskNumber - 1) || writingSections?.[taskNumber - 1];
@@ -410,6 +410,34 @@ export const getSubmissionDetails = async (req, res) => {
             task_number: taskNumber,
             response_text: essayText,
             word_count: essayText.trim() ? essayText.trim().split(/\s+/).length : 0,
+            section_title: section?.title || `Writing Task ${taskNumber}`,
+            ai_overall_band: null,
+            ai_task_response_score: null,
+            ai_coherence_score: null,
+            ai_lexical_score: null,
+            ai_grammar_score: null,
+            ai_feedback: null,
+            admin_override_band: null,
+            admin_feedback: null,
+          });
+          existingTaskNumbers.add(taskNumber);
+        }
+      }
+    }
+
+    // Ensure all writing sections are represented (even if empty)
+    if (writingSections && writingSections.length > 0) {
+      for (let i = 0; i < writingSections.length; i++) {
+        const taskNumber = i + 1;
+        if (!existingTaskNumbers.has(taskNumber)) {
+          const section = writingSections[i];
+          finalWritingResponses.push({
+            id: `empty-${taskNumber}`,
+            submission_id: id,
+            section_id: section?.id || null,
+            task_number: taskNumber,
+            response_text: '',
+            word_count: 0,
             section_title: section?.title || `Writing Task ${taskNumber}`,
             ai_overall_band: null,
             ai_task_response_score: null,
