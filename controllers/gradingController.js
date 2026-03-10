@@ -171,16 +171,47 @@ Respond ONLY with a valid JSON object (no markdown code blocks, no extra text):
         final_band: grading.overall_band
       };
 
+      let saveResult;
       if (existingId) {
-        await supabase
+        saveResult = await supabase
           .from("writing_responses")
           .update(writeData)
-          .eq("id", existingId);
+          .eq("id", existingId)
+          .select()
+          .single();
       } else {
-        await supabase
+        saveResult = await supabase
           .from("writing_responses")
-          .insert([writeData]);
+          .insert([writeData])
+          .select()
+          .single();
       }
+
+      if (saveResult.error) {
+        console.error("Failed to save writing response:", saveResult.error);
+        // Still return the grading but flag that save failed
+        return res.json({
+          success: true,
+          save_error: saveResult.error.message,
+          grading: {
+            overall_band: grading.overall_band,
+            task_response: grading.task_response,
+            coherence_cohesion: grading.coherence_cohesion,
+            lexical_resource: grading.lexical_resource,
+            grammatical_range: grading.grammatical_range,
+            feedback: grading.overall_feedback || grading.feedback,
+            task_response_feedback: grading.task_response_feedback,
+            coherence_feedback: grading.coherence_feedback,
+            lexical_feedback: grading.lexical_feedback,
+            grammar_feedback: grading.grammar_feedback,
+            key_improvements: grading.key_improvements,
+            word_count: wordCount,
+            word_count_penalty: grading.word_count_penalty
+          }
+        });
+      }
+
+      console.log("Writing response saved successfully, id:", saveResult.data?.id);
 
       // Update submission grading status
       await supabase
