@@ -361,8 +361,26 @@ export const getSubmissionDetails = async (req, res) => {
 
     // Fallback: if no writing_responses exist, extract essays from the raw submission answers JSON
     let finalWritingResponses = writingResponses || [];
-    if (finalWritingResponses.length === 0 && submission.answers) {
-      const rawAnswers = typeof submission.answers === 'string' ? JSON.parse(submission.answers) : submission.answers;
+    if (finalWritingResponses.length === 0) {
+      // Try submission.answers first, then fall back to autosave
+      let rawAnswers = null;
+      if (submission.answers && typeof submission.answers === 'object' && Object.keys(submission.answers).length > 0) {
+        rawAnswers = submission.answers;
+      } else {
+        // Check autosaves table
+        const { data: autosave } = await supabase
+          .from('exam_autosaves')
+          .select('answers_data')
+          .eq('exam_id', submission.exam_id)
+          .eq('user_id', submission.user_id)
+          .order('last_updated', { ascending: false })
+          .limit(1)
+          .single();
+        if (autosave?.answers_data) {
+          rawAnswers = typeof autosave.answers_data === 'string' ? JSON.parse(autosave.answers_data) : autosave.answers_data;
+        }
+      }
+
       if (rawAnswers && typeof rawAnswers === 'object') {
         const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task_'));
         if (writingKeys.length > 0) {
