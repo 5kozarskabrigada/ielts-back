@@ -1196,6 +1196,57 @@ export const submitExam = async (req, res) => {
       }
     }
 
+    // Save writing essays to writing_responses table
+    try {
+      // Find writing_task_* keys in submitted answers
+      const writingKeys = Object.keys(answers).filter(k => k.startsWith('writing_task_'));
+      if (writingKeys.length > 0) {
+        // Get writing sections for this exam
+        const { data: writingSections } = await supabase
+          .from('exam_sections')
+          .select('id, section_order, task_config, title')
+          .eq('exam_id', examId)
+          .eq('module_type', 'writing')
+          .order('section_order', { ascending: true });
+
+        for (const key of writingKeys) {
+          const taskNumber = parseInt(key.replace('writing_task_', ''), 10);
+          const essayText = answers[key];
+          if (!essayText || typeof essayText !== 'string' || essayText.trim().length === 0) continue;
+
+          // Match to writing section by task number (section_order or index)
+          const section = writingSections?.find((s, idx) => (idx + 1) === taskNumber) || writingSections?.[taskNumber - 1];
+          const sectionId = section?.id || null;
+          const wordCount = essayText.trim().split(/\s+/).length;
+
+          // Check if writing_response already exists
+          const { data: existing } = await supabase
+            .from('writing_responses')
+            .select('id')
+            .eq('submission_id', submission.id)
+            .eq('task_number', taskNumber)
+            .single();
+
+          const writeData = {
+            submission_id: submission.id,
+            section_id: sectionId,
+            task_number: taskNumber,
+            response_text: essayText,
+            word_count: wordCount,
+          };
+
+          if (existing) {
+            await supabase.from('writing_responses').update(writeData).eq('id', existing.id);
+          } else {
+            await supabase.from('writing_responses').insert([writeData]);
+          }
+        }
+      }
+    } catch (writingErr) {
+      console.error('Error saving writing responses (non-fatal):', writingErr);
+      // Non-fatal - don't fail submission for this
+    }
+
     res.json({ 
       message: "Exam submitted successfully", 
       score: roundedBand,

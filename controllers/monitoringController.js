@@ -359,6 +359,47 @@ export const getSubmissionDetails = async (req, res) => {
       .eq('submission_id', id)
       .order('task_number', { ascending: true });
 
+    // Fallback: if no writing_responses exist, extract essays from the raw submission answers JSON
+    let finalWritingResponses = writingResponses || [];
+    if (finalWritingResponses.length === 0 && submission.answers) {
+      const rawAnswers = typeof submission.answers === 'string' ? JSON.parse(submission.answers) : submission.answers;
+      if (rawAnswers && typeof rawAnswers === 'object') {
+        const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task_'));
+        if (writingKeys.length > 0) {
+          // Get writing sections for context
+          const { data: writingSections } = await supabase
+            .from('exam_sections')
+            .select('id, section_order, title, task_config')
+            .eq('exam_id', submission.exam_id)
+            .eq('module_type', 'writing')
+            .order('section_order', { ascending: true });
+
+          finalWritingResponses = writingKeys.sort().map((key, idx) => {
+            const taskNumber = parseInt(key.replace('writing_task_', ''), 10);
+            const essayText = rawAnswers[key] || '';
+            const section = writingSections?.[idx];
+            return {
+              id: `raw-${taskNumber}`,
+              submission_id: id,
+              section_id: section?.id || null,
+              task_number: taskNumber,
+              response_text: essayText,
+              word_count: essayText.trim() ? essayText.trim().split(/\s+/).length : 0,
+              section_title: section?.title || `Writing Task ${taskNumber}`,
+              ai_overall_band: null,
+              ai_task_response_score: null,
+              ai_coherence_score: null,
+              ai_lexical_score: null,
+              ai_grammar_score: null,
+              ai_feedback: null,
+              admin_override_band: null,
+              admin_feedback: null,
+            };
+          });
+        }
+      }
+    }
+
     res.json({
       ...submission,
       user_name: submission.users ? `${submission.users.first_name} ${submission.users.last_name}`.trim() : 'Unknown',
@@ -366,7 +407,7 @@ export const getSubmissionDetails = async (req, res) => {
       exam_title: submission.exams?.title,
       answers: answerDetails,
       answers_by_module: answersByModule,
-      writing_responses: writingResponses || [],
+      writing_responses: finalWritingResponses,
       logs: logs || [],
       violations: violations || []
     });
