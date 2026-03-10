@@ -2,7 +2,7 @@ import { supabase } from "../supabaseClient.js";
 
 // Gemini AI Grading for Writing Section
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
 // Grade writing response using Gemini AI
 export const gradeWritingWithAI = async (req, res) => {
@@ -74,7 +74,7 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
     if (!response.ok) {
       const errorData = await response.json();
       console.error("Gemini API Error:", errorData);
-      return res.status(500).json({ error: "AI grading service unavailable", details: errorData.error?.message });
+      return res.status(500).json({ error: "AI grading service unavailable: " + (errorData.error?.message || JSON.stringify(errorData)) });
     }
 
     const aiResult = await response.json();
