@@ -397,9 +397,9 @@ export const getSubmissionDetails = async (req, res) => {
 
     // Check for missing tasks in raw answers
     if (rawAnswers && typeof rawAnswers === 'object') {
-      const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task_'));
+      const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task'));
       for (const key of writingKeys) {
-        const taskNumber = parseInt(key.replace('writing_task_', ''), 10);
+        const taskNumber = parseInt(key.replace('writing_task', ''), 10);
         if (!existingTaskNumbers.has(taskNumber)) {
           const essayText = rawAnswers[key] || '';
           const section = writingSections?.find(s => s.section_order === taskNumber - 1) || writingSections?.[taskNumber - 1];
