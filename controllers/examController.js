@@ -1081,6 +1081,38 @@ export const submitExam = async (req, res) => {
       return res.status(400).json({ error: "No questions found for this exam" });
     }
 
+    // Remap synthetic placeholder IDs to real question IDs
+    // Frontend uses keys like "summary_placeholder_<groupId>_<index>" for summary_completion blanks
+    const remappedAnswers = { ...answers };
+    const placeholderKeys = Object.keys(remappedAnswers).filter(k => k.startsWith('summary_placeholder_'));
+    if (placeholderKeys.length > 0) {
+      // Load question groups to map placeholder index to question_number
+      const { data: exam } = await supabase.from("exams").select("modules_config").eq("id", examId).single();
+      const allGroups = [
+        ...(exam?.modules_config?.listening_question_groups || []),
+        ...(exam?.modules_config?.reading_question_groups || [])
+      ];
+      
+      for (const key of placeholderKeys) {
+        // Parse "summary_placeholder_<groupId>_<index>"
+        const parts = key.replace('summary_placeholder_', '').split('_');
+        const blankIndex = parseInt(parts.pop(), 10);
+        const groupId = parts.join('_'); // rejoin in case UUID has underscores (it uses hyphens, but be safe)
+        
+        const group = allGroups.find(g => g.id === groupId);
+        if (group) {
+          const qNum = group.question_range_start + blankIndex;
+          const realQuestion = questions.find(q => 
+            q.exam_sections?.id === group.section_id && q.question_number === qNum
+          );
+          if (realQuestion) {
+            remappedAnswers[realQuestion.id] = remappedAnswers[key];
+            delete remappedAnswers[key];
+          }
+        }
+      }
+    }
+
     let totalScore = 0;
     let totalPoints = 0;
     const gradedAnswers = [];
@@ -1123,7 +1155,7 @@ export const submitExam = async (req, res) => {
 
     questions.forEach(q => {
       try {
-        const userAns = answers[q.id];
+        const userAns = remappedAnswers[q.id];
         const moduleType = q.exam_sections?.module_type || 'unknown';
         const qType = q.question_type || '';
         let isCorrect = false;
@@ -1224,7 +1256,7 @@ export const submitExam = async (req, res) => {
       const { data: updatedSubmission, error: updateError } = await supabase
         .from("exam_submissions")
         .update({
-          answers: answers,
+          answers: remappedAnswers,
           scores_by_module: scoresByModule, 
           band_score: roundedBand,
           overall_band_score: roundedBand,
@@ -1263,7 +1295,7 @@ export const submitExam = async (req, res) => {
           {
             user_id: userId,
             exam_id: examId,
-            answers: answers,
+            answers: remappedAnswers,
             scores_by_module: scoresByModule, 
             band_score: roundedBand,
             overall_band_score: roundedBand,
@@ -1308,7 +1340,7 @@ export const submitExam = async (req, res) => {
     // Save writing essays to writing_responses table
     try {
       // Find writing_task_* keys in submitted answers
-      const writingKeys = Object.keys(answers).filter(k => k.startsWith('writing_task_'));
+      const writingKeys = Object.keys(remappedAnswers).filter(k => k.startsWith('writing_task_'));
       if (writingKeys.length > 0) {
         // Get writing sections for this exam
         const { data: writingSections } = await supabase
@@ -1320,7 +1352,7 @@ export const submitExam = async (req, res) => {
 
         for (const key of writingKeys) {
           const taskNumber = parseInt(key.replace('writing_task_', ''), 10);
-          const essayText = answers[key];
+          const essayText = remappedAnswers[key];
           if (!essayText || typeof essayText !== 'string' || essayText.trim().length === 0) continue;
 
           // Match to writing section by task number (section_order or index)
