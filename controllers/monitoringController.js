@@ -352,6 +352,88 @@ export const getSubmissionDetails = async (req, res) => {
       }
     });
 
+    // Recover summary_completion answers from raw submission data for old submissions
+    const rawSubmissionAnswers = submission.answers;
+    if (rawSubmissionAnswers && typeof rawSubmissionAnswers === 'object') {
+      const placeholderKeys = Object.keys(rawSubmissionAnswers).filter(k => k.startsWith('summary_placeholder_'));
+      if (placeholderKeys.length > 0) {
+        // Load exam groups to resolve placeholder IDs
+        const { data: examData } = await supabase.from("exams").select("modules_config").eq("id", submission.exam_id).single();
+        const allGroups = [
+          ...(examData?.modules_config?.listening_question_groups || []),
+          ...(examData?.modules_config?.reading_question_groups || [])
+        ];
+        // Load sections to get module_type and title
+        const { data: examSections } = await supabase
+          .from("exam_sections")
+          .select("id, module_type, title, section_order")
+          .eq("exam_id", submission.exam_id);
+        const sectionMap = {};
+        (examSections || []).forEach(s => { sectionMap[s.id] = s; });
+
+        for (const key of placeholderKeys) {
+          const parts = key.replace('summary_placeholder_', '').split('_');
+          const blankIndex = parseInt(parts.pop(), 10);
+          const groupId = parts.join('_');
+          const group = allGroups.find(g => g.id === groupId);
+          if (!group) continue;
+
+          const qNum = group.question_range_start + blankIndex;
+          const userAnswer = rawSubmissionAnswers[key];
+          const correctAnswer = group.summary_data?.answers?.[blankIndex] || '';
+          const section = sectionMap[group.section_id];
+          const moduleType = section?.module_type || 'reading';
+
+          // Check if this question_number is already covered by answerDetails
+          const alreadyExists = answerDetails.some(a =>
+            a.section_order === (section?.section_order || 0) && a.question_number === qNum
+          );
+          if (alreadyExists) continue;
+
+          const userStr = userAnswer ? String(userAnswer).trim().toLowerCase() : '';
+          let isCorrect = false;
+          if (userStr && correctAnswer) {
+            const correctOptions = String(correctAnswer).split('/').map(s => s.trim().toLowerCase());
+            isCorrect = correctOptions.includes(userStr);
+          }
+
+          const entry = {
+            question_id: key,
+            question_number: qNum,
+            question_type: 'summary_completion',
+            question_text: `Summary completion blank ${blankIndex + 1}`,
+            user_answer: userAnswer || null,
+            correct_answer: correctAnswer,
+            is_correct: isCorrect,
+            score: isCorrect ? 1 : 0,
+            module_type: moduleType,
+            section_title: section?.title || 'Unknown',
+            section_order: section?.section_order || 0,
+            options: {}
+          };
+
+          answerDetails.push(entry);
+          if (answersByModule[moduleType]) {
+            answersByModule[moduleType].answers.push(entry);
+            if (isCorrect) {
+              answersByModule[moduleType].correct++;
+            } else {
+              answersByModule[moduleType].wrong++;
+            }
+          }
+        }
+
+        // Re-sort answerDetails
+        answerDetails.sort((a, b) => {
+          const moduleOrder = { listening: 0, reading: 1, writing: 2 };
+          const moduleDiff = (moduleOrder[a.module_type] || 99) - (moduleOrder[b.module_type] || 99);
+          if (moduleDiff !== 0) return moduleDiff;
+          if (a.section_order !== b.section_order) return a.section_order - b.section_order;
+          return a.question_number - b.question_number;
+        });
+      }
+    }
+
     // Get writing responses for this submission
     const { data: writingResponses } = await supabase
       .from('writing_responses')
