@@ -228,9 +228,22 @@ export const saveExamStructure = async (req, res) => {
             question_range_start: g.question_range_start,
             question_range_end: g.question_range_end,
             instruction_text: g.instruction_text || null,
+            table_title: g.table_title || null,
+            table_data: g.table_data || null,
+            max_words: g.max_words || null,
+            max_numbers: g.max_numbers || null,
+            answer_format: g.answer_format || 'words_and_numbers',
+            has_example: g.has_example || false,
+            example_data: g.example_data || null,
+            shared_options: g.shared_options || null,
             image_url: g.image_url || null,
             image_description: g.image_description || null,
-            points_per_question: g.points_per_question || 1
+            layout_type: g.layout_type || null,
+            points_per_question: g.points_per_question || 1,
+            case_sensitive: g.case_sensitive || false,
+            spelling_tolerance: g.spelling_tolerance !== false,
+            summary_data: g.summary_data || null,
+            summary_title: g.summary_title || null
           };
         });
       }
