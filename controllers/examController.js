@@ -253,6 +253,51 @@ export const saveExamStructure = async (req, res) => {
         .from("exams")
         .update({ modules_config: modulesConfig })
         .eq("id", examId);
+
+      // Auto-create question rows for summary_completion blanks (both listening and reading groups)
+      const allGroups = [
+        ...(modulesConfig.listening_question_groups || []),
+        ...(modulesConfig.reading_question_groups || [])
+      ];
+      for (const group of allGroups) {
+        if (group.question_type === 'summary_completion' && group.summary_data?.text) {
+          const blankCount = (group.summary_data.text.match(/\[BLANK\]/g) || []).length;
+          const answersArr = group.summary_data.answers || [];
+          for (let i = 0; i < blankCount; i++) {
+            const qNum = group.question_range_start + i;
+            // Check if question row already exists for this section + question_number
+            const { data: existing } = await supabase
+              .from("questions")
+              .select("id")
+              .eq("exam_id", examId)
+              .eq("section_id", group.section_id)
+              .eq("question_number", qNum)
+              .limit(1);
+            if (!existing || existing.length === 0) {
+              const correctAnswer = answersArr[i] || '';
+              // Parse alternatives if answer contains slash
+              let mainAnswer = correctAnswer;
+              let alternatives = null;
+              if (typeof correctAnswer === 'string' && correctAnswer.includes('/')) {
+                const parts = correctAnswer.split('/').map(s => s.trim()).filter(Boolean);
+                mainAnswer = parts[0];
+                alternatives = parts.slice(1);
+              }
+              await supabase.from("questions").insert([{
+                exam_id: examId,
+                section_id: group.section_id,
+                question_number: qNum,
+                question_text: `Summary completion blank ${i + 1}`,
+                question_type: 'summary_completion',
+                correct_answer: mainAnswer,
+                answer_alternatives: alternatives,
+                points: 1,
+                question_data: { group_id: group.id }
+              }]);
+            }
+          }
+        }
+      }
     }
 
     // 5. Process Questions - batch by new vs existing
