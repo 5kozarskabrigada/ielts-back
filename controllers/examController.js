@@ -1439,7 +1439,7 @@ export const verifyExamCode = async (req, res) => {
 export const autosaveAnswers = async (req, res) => {
   const { id: examId } = req.params;
   const userId = req.user.id;
-  const { answers, module, timestamp } = req.body;
+  const { answers, module, timestamp, currentPart, currentWritingTask, timeSpent } = req.body;
 
   try {
     // Store in a temporary autosave table or update existing submission draft
@@ -1450,6 +1450,9 @@ export const autosaveAnswers = async (req, res) => {
         user_id: userId,
         answers_data: answers,
         current_module: module,
+        current_part: currentPart,
+        current_writing_task: currentWritingTask,
+        time_spent: timeSpent,
         last_updated: timestamp || new Date().toISOString()
       }], {
         onConflict: 'exam_id,user_id'
@@ -1484,6 +1487,45 @@ export const logExamEvent = async (req, res) => {
     res.json({ message: "Logged" });
   } catch (err) {
     console.error("Log event error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Check if user has already submitted this exam
+export const checkExamStatus = async (req, res) => {
+  const { id: examId } = req.params;
+  const userId = req.user.id;
+
+  try {
+    // Check for existing submission
+    const { data: submission, error: submissionError } = await supabase
+      .from("exam_submissions")
+      .select('id, submitted_at')
+      .eq('exam_id', examId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (submissionError) throw submissionError;
+
+    // Check for autosave data
+    const { data: autosave, error: autosaveError } = await supabase
+      .from("exam_autosaves")
+      .select('*')
+      .eq('exam_id', examId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (autosaveError && autosaveError.code !== 'PGRST116') throw autosaveError;
+
+    res.json({
+      submitted: !!submission,
+      submission_id: submission?.id,
+      submitted_at: submission?.submitted_at,
+      has_autosave: !!autosave,
+      autosave: autosave || null
+    });
+  } catch (err) {
+    console.error("Check exam status error:", err);
     res.status(500).json({ error: err.message });
   }
 };

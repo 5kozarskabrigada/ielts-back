@@ -1,5 +1,5 @@
 import express from "express";
-import { listExams, createExam, getExam, addQuestions, submitExam, updateExamStatus, getExamLogs, createSection, saveExamStructure, deleteExam, restoreExam, listDeletedExams, permanentlyDeleteExam, regenerateExamCode, deleteQuestion, restoreQuestion, listDeletedQuestions, permanentlyDeleteQuestion, getExamStats, updateAccessCode, verifyExamCode, autosaveAnswers, logExamEvent } from "../controllers/examController.js";
+import { listExams, createExam, getExam, addQuestions, submitExam, updateExamStatus, getExamLogs, createSection, saveExamStructure, deleteExam, restoreExam, listDeletedExams, permanentlyDeleteExam, regenerateExamCode, deleteQuestion, restoreQuestion, listDeletedQuestions, permanentlyDeleteQuestion, getExamStats, updateAccessCode, verifyExamCode, autosaveAnswers, logExamEvent, checkExamStatus } from "../controllers/examController.js";
 import { logViolation } from "../controllers/monitoringController.js";
 import { authMiddleware, requireRole } from "../middleware/authMiddleware.js";
 
@@ -10,6 +10,7 @@ router.use(authMiddleware);
 // Public routes (authenticated)
 router.get("/", listExams);
 router.get("/:id", getExam);
+router.get("/:id/status", checkExamStatus); // Check if exam was submitted / has autosave
 router.post("/verify-code", verifyExamCode); // Student joins exam with code
 router.post("/:id/autosave", autosaveAnswers); // Auto-save during exam
 router.post("/:id/log", logExamEvent); // Log exam events
