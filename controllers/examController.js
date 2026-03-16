@@ -65,6 +65,31 @@ export const uploadPassageImage = async (req, res) => {
 // Helper to check if string is a valid UUID
 const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
+// Normalize legacy and current matching style values to canonical values
+const normalizeMatchingStyle = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized.startsWith('letter') ? 'letters' : 'roman';
+};
+
+const normalizeModulesConfig = (modulesConfig = {}) => {
+  if (!modulesConfig || typeof modulesConfig !== 'object') return {};
+
+  const readingQuestionGroups = Array.isArray(modulesConfig.reading_question_groups)
+    ? modulesConfig.reading_question_groups.map((group) => {
+        if (!group || typeof group !== 'object') return group;
+        return {
+          ...group,
+          matching_style: normalizeMatchingStyle(group.matching_style),
+        };
+      })
+    : modulesConfig.reading_question_groups;
+
+  return {
+    ...modulesConfig,
+    reading_question_groups: readingQuestionGroups,
+  };
+};
+
 export const saveExamStructure = async (req, res) => {
   const { id: examId } = req.params;
   const { exam, sections, questions, deletedQuestionIds, questionGroups, deletedGroupIds } = req.body;
@@ -158,7 +183,7 @@ export const saveExamStructure = async (req, res) => {
     }
 
     // 4. NOW save question groups to modules_config with MAPPED section IDs and generate UUIDs for temp groups
-    const modulesConfig = exam.modules_config || {};
+    const modulesConfig = normalizeModulesConfig(exam.modules_config || {});
     if (questionGroups && questionGroups.length > 0) {
       // Generate real UUIDs for any temp groups
       questionGroups.forEach(g => {
@@ -238,7 +263,7 @@ export const saveExamStructure = async (req, res) => {
             example: g.example || null,
             headings_list: g.headings_list || null,
             people_list: g.people_list || null,
-            matching_style: g.matching_style || 'roman',
+            matching_style: normalizeMatchingStyle(g.matching_style),
             shared_options: g.shared_options || null,
             image_url: g.image_url || null,
             image_description: g.image_description || null,
@@ -706,7 +731,7 @@ export const createExam = async (req, res) => {
           title,
           description,
           duration_minutes,
-          modules_config: modules_config || {},
+          modules_config: normalizeModulesConfig(modules_config || {}),
           access_code: access_code || Math.random().toString(36).substring(2, 8).toUpperCase(),
           created_by: createdBy,
           status: "draft",
@@ -796,6 +821,22 @@ export const getExam = async (req, res) => {
     if (examError || !exam) {
       return res.status(404).json({ error: "Exam not found" });
     }
+
+    const normalizedModulesConfig = normalizeModulesConfig(exam.modules_config || {});
+    const shouldPersistNormalizedModules = JSON.stringify(normalizedModulesConfig) !== JSON.stringify(exam.modules_config || {});
+
+    if (shouldPersistNormalizedModules) {
+      const { error: normalizeError } = await supabase
+        .from("exams")
+        .update({ modules_config: normalizedModulesConfig })
+        .eq("id", id);
+
+      if (normalizeError) {
+        console.warn("[getExam] Failed to persist normalized modules_config:", normalizeError.message);
+      }
+    }
+
+    exam.modules_config = normalizedModulesConfig;
 
     // Check access
     if (role === "student" && exam.status !== "active") {
