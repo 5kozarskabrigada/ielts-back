@@ -1095,6 +1095,49 @@ export const submitExam = async (req, res) => {
   const { answers, time_spent_by_module } = req.body;
 
   try {
+    const submittedAnswers = answers && typeof answers === 'object' ? answers : {};
+
+    // Merge latest autosave into final payload so no recent answers are lost
+    const { data: autosaveData, error: autosaveError } = await supabase
+      .from("exam_autosaves")
+      .select("answers_data, time_spent, last_updated")
+      .eq("exam_id", examId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (autosaveError && autosaveError.code !== 'PGRST116') {
+      throw autosaveError;
+    }
+
+    const autosaveAnswers = autosaveData?.answers_data && typeof autosaveData.answers_data === 'object'
+      ? autosaveData.answers_data
+      : {};
+
+    const mergedFinalAnswers = {
+      ...autosaveAnswers,
+      ...submittedAnswers
+    };
+
+    const submittedTimeSpent = time_spent_by_module && typeof time_spent_by_module === 'object'
+      ? time_spent_by_module
+      : {};
+    const autosaveTimeSpent = autosaveData?.time_spent && typeof autosaveData.time_spent === 'object'
+      ? autosaveData.time_spent
+      : {};
+
+    const normalizedTimeSpentByModule = {
+      listening: Number(submittedTimeSpent.listening ?? autosaveTimeSpent.listening ?? 0) || 0,
+      reading: Number(submittedTimeSpent.reading ?? autosaveTimeSpent.reading ?? 0) || 0,
+      writing: Number(
+        submittedTimeSpent.writing ?? (
+          Number(autosaveTimeSpent.writing_task1 || 0) + Number(autosaveTimeSpent.writing_task2 || 0)
+        ) ?? 0
+      ) || 0
+    };
+
+    const totalTimeSpent = Object.values(normalizedTimeSpentByModule)
+      .reduce((sum, value) => sum + (Number(value) || 0), 0);
+
     // Check if already submitted
     const { data: existing, error: existingError } = await supabase
       .from("exam_submissions")
@@ -1143,7 +1186,7 @@ export const submitExam = async (req, res) => {
 
     // Remap synthetic placeholder IDs to real question IDs
     // Frontend uses keys like "summary_placeholder_<groupId>_<index>" for summary_completion blanks
-    const remappedAnswers = { ...answers };
+    const remappedAnswers = { ...mergedFinalAnswers };
     const placeholderKeys = Object.keys(remappedAnswers).filter(k => k.startsWith('summary_placeholder_'));
     if (placeholderKeys.length > 0) {
       // Load question groups to map placeholder index to question_number
@@ -1322,8 +1365,8 @@ export const submitExam = async (req, res) => {
           overall_band_score: roundedBand,
           total_correct: totalScore,
           total_questions: questions.length,
-          time_spent: Object.values(time_spent_by_module || {}).reduce((a, b) => a + b, 0),
-          time_spent_by_module,
+          time_spent: totalTimeSpent,
+          time_spent_by_module: normalizedTimeSpentByModule,
           status: "submitted",
           submitted_at: new Date(),
         })
@@ -1361,8 +1404,8 @@ export const submitExam = async (req, res) => {
             overall_band_score: roundedBand,
             total_correct: totalScore,
             total_questions: questions.length,
-            time_spent: Object.values(time_spent_by_module || {}).reduce((a, b) => a + b, 0),
-            time_spent_by_module,
+            time_spent: totalTimeSpent,
+            time_spent_by_module: normalizedTimeSpentByModule,
             status: "submitted",
             submitted_at: new Date(),
           },
@@ -1392,8 +1435,15 @@ export const submitExam = async (req, res) => {
         .insert(answerRecords);
 
       if (ansError) {
-        console.error('Error inserting answers:', ansError);
-        throw ansError;
+        console.error('Error inserting answers (attempt 1):', ansError);
+
+        const { error: retryAnsError } = await supabase
+          .from("answers")
+          .insert(answerRecords);
+
+        if (retryAnsError) {
+          console.error('Error inserting answers (attempt 2, non-fatal):', retryAnsError);
+        }
       }
     }
 
@@ -1446,6 +1496,17 @@ export const submitExam = async (req, res) => {
     } catch (writingErr) {
       console.error('Error saving writing responses (non-fatal):', writingErr);
       // Non-fatal - don't fail submission for this
+    }
+
+    // Clean up autosave draft after successful submission
+    try {
+      await supabase
+        .from("exam_autosaves")
+        .delete()
+        .eq("exam_id", examId)
+        .eq("user_id", userId);
+    } catch (autosaveCleanupErr) {
+      console.error('Error cleaning autosave draft (non-fatal):', autosaveCleanupErr);
     }
 
     res.json({ 
@@ -1590,27 +1651,111 @@ export const autosaveAnswers = async (req, res) => {
   const { id: examId } = req.params;
   const userId = req.user.id;
   const { answers, module, timestamp, currentPart, currentWritingTask, timeSpent } = req.body;
+  const parsedIncomingTimestamp = new Date(timestamp || new Date().toISOString());
+  const incomingTimestamp = Number.isNaN(parsedIncomingTimestamp.getTime())
+    ? new Date().toISOString()
+    : parsedIncomingTimestamp.toISOString();
 
   try {
-    // Store in a temporary autosave table or update existing submission draft
-    const { data, error } = await supabase
-      .from("exam_autosaves")
-      .upsert([{
-        exam_id: examId,
-        user_id: userId,
-        answers_data: answers,
-        current_module: module,
-        current_part: currentPart,
-        current_writing_task: currentWritingTask,
-        time_spent: timeSpent,
-        last_updated: timestamp || new Date().toISOString()
-      }], {
-        onConflict: 'exam_id,user_id'
-      })
-      .select();
+    const { data: existingSubmission, error: submissionCheckError } = await supabase
+      .from("exam_submissions")
+      .select("id, status")
+      .eq("exam_id", examId)
+      .eq("user_id", userId)
+      .maybeSingle();
 
-    if (error) throw error;
-    res.json({ message: "Autosaved", timestamp: new Date().toISOString() });
+    if (submissionCheckError && submissionCheckError.code !== 'PGRST116') {
+      throw submissionCheckError;
+    }
+
+    if (existingSubmission?.status === "submitted" || existingSubmission?.status === "auto_submitted") {
+      return res.status(409).json({ error: "Exam already submitted. Autosave is locked." });
+    }
+
+    const { data: existingAutosave, error: existingAutosaveError } = await supabase
+      .from("exam_autosaves")
+      .select("id, last_updated")
+      .eq("exam_id", examId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (existingAutosaveError && existingAutosaveError.code !== 'PGRST116') {
+      throw existingAutosaveError;
+    }
+
+    if (existingAutosave?.last_updated) {
+      const existingTimestamp = new Date(existingAutosave.last_updated).getTime();
+      const candidateTimestamp = new Date(incomingTimestamp).getTime();
+      if (!Number.isNaN(existingTimestamp) && candidateTimestamp <= existingTimestamp) {
+        return res.json({
+          message: "Ignored stale autosave",
+          timestamp: existingAutosave.last_updated,
+          ignored: true
+        });
+      }
+    }
+
+    const autosavePayload = {
+      exam_id: examId,
+      user_id: userId,
+      answers_data: answers,
+      current_module: module,
+      current_part: currentPart,
+      current_writing_task: currentWritingTask,
+      time_spent: timeSpent,
+      last_updated: incomingTimestamp
+    };
+
+    if (existingAutosave?.id) {
+      const { data: updatedAutosave, error: updateError } = await supabase
+        .from("exam_autosaves")
+        .update(autosavePayload)
+        .eq("id", existingAutosave.id)
+        .lte("last_updated", incomingTimestamp)
+        .select("id, last_updated")
+        .maybeSingle();
+
+      if (updateError && updateError.code !== 'PGRST116') throw updateError;
+
+      if (!updatedAutosave) {
+        return res.json({
+          message: "Ignored stale autosave",
+          timestamp: incomingTimestamp,
+          ignored: true
+        });
+      }
+    } else {
+      const { error: insertError } = await supabase
+        .from("exam_autosaves")
+        .insert([autosavePayload]);
+
+      if (insertError) {
+        if (insertError.code === '23505') {
+          const { data: retriedAutosave, error: retryUpdateError } = await supabase
+            .from("exam_autosaves")
+            .update(autosavePayload)
+            .eq("exam_id", examId)
+            .eq("user_id", userId)
+            .lte("last_updated", incomingTimestamp)
+            .select("id, last_updated")
+            .maybeSingle();
+
+          if (retryUpdateError && retryUpdateError.code !== 'PGRST116') throw retryUpdateError;
+
+          if (!retriedAutosave) {
+            return res.json({
+              message: "Ignored stale autosave",
+              timestamp: incomingTimestamp,
+              ignored: true
+            });
+          }
+        } else {
+          throw insertError;
+        }
+      }
+    }
+
+    res.json({ message: "Autosaved", timestamp: incomingTimestamp });
   } catch (err) {
     console.error("Autosave error:", err);
     res.status(500).json({ error: err.message });
