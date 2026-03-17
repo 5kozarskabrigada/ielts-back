@@ -942,12 +942,12 @@ export const getExam = async (req, res) => {
       .eq("exam_id", id)
       .order("section_order", { ascending: true });
 
-    // Fetch questions (exclude deleted)
+    // Fetch questions (exclude deleted; NULL is treated as not-deleted)
     const { data: questions, error: questionsError } = await supabase
       .from("questions")
       .select("*")
       .eq("exam_id", id)
-      .neq("is_deleted", true)
+      .or("is_deleted.eq.false,is_deleted.is.null")
       .order("module_type")
       .order("question_number");
 
@@ -982,34 +982,36 @@ export const getExam = async (req, res) => {
         const listeningSectionIds = listeningSections.map(s => s.id);
         
         if (listeningSectionIds.length > 0) {
-          // Try dedicated table first
-          const { data: groups, error: groupsError } = await supabase
+          // Source 1: dedicated table
+          const { data: tableGroups, error: groupsError } = await supabase
             .from("listening_question_groups")
             .select("*")
             .in("section_id", listeningSectionIds)
             .order("group_order", { ascending: true });
-          
-          if (!groupsError && groups?.length > 0) {
-            questionGroups.push(...groups);
-          } else {
-            // Fallback 1: read from section's task_config
-            for (const sec of listeningSections) {
-              if (sec.task_config) {
-                try {
-                  const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
-                  if (config.question_groups) {
-                    questionGroups.push(...config.question_groups);
-                  }
-                } catch (e) { 
-                  // Ignore parse errors
+
+          if (!groupsError && tableGroups?.length > 0) {
+            questionGroups.push(...tableGroups);
+          }
+
+          // Source 2: section task_config
+          for (const sec of listeningSections) {
+            if (sec.task_config) {
+              try {
+                const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
+                if (Array.isArray(config.question_groups)) {
+                  questionGroups.push(...config.question_groups);
                 }
+              } catch (e) {
+                // Ignore parse errors
               }
             }
-            
-            // Fallback 2: read from exam's modules_config (only if not already loaded from task_config)
-            if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
-              questionGroups.push(...exam.modules_config.listening_question_groups);
-            }
+          }
+
+          // Source 3: exam modules_config
+          if (Array.isArray(exam.modules_config?.listening_question_groups)) {
+            questionGroups.push(
+              ...exam.modules_config.listening_question_groups.filter(g => listeningSectionIds.includes(g.section_id))
+            );
           }
         }
         
@@ -1019,14 +1021,23 @@ export const getExam = async (req, res) => {
         
         if (readingSectionIds.length > 0) {
           // Reading groups are stored in modules_config
-          if (exam.modules_config?.reading_question_groups) {
-            questionGroups.push(...exam.modules_config.reading_question_groups);
+          if (Array.isArray(exam.modules_config?.reading_question_groups)) {
+            questionGroups.push(
+              ...exam.modules_config.reading_question_groups.filter(g => readingSectionIds.includes(g.section_id))
+            );
           }
         }
         
-        // Deduplicate groups by ID
+        // Deduplicate groups by ID (fallback key for legacy groups without id)
         const uniqueGroups = Array.from(
-          new Map(questionGroups.map(g => [g.id, g])).values()
+          new Map(
+            questionGroups
+              .filter(Boolean)
+              .map(g => {
+                const fallbackKey = `${g.section_id || 'section'}:${g.question_type || 'type'}:${g.question_range_start || 'start'}:${g.question_range_end || 'end'}`;
+                return [g.id || fallbackKey, g];
+              })
+          ).values()
         );
 
         return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups: uniqueGroups });
@@ -1057,34 +1068,36 @@ export const getExam = async (req, res) => {
     const listeningSectionIds = listeningSections.map(s => s.id);
     
     if (listeningSectionIds.length > 0) {
-      // Try dedicated table first
-      const { data: groups, error: groupsError } = await supabase
+      // Source 1: dedicated table
+      const { data: tableGroups, error: groupsError } = await supabase
         .from("listening_question_groups")
         .select("*")
         .in("section_id", listeningSectionIds)
         .order("group_order", { ascending: true });
-      
-      if (!groupsError && groups?.length > 0) {
-        questionGroups.push(...groups);
-      } else {
-        // Fallback 1: read from section's task_config
-        for (const sec of listeningSections) {
-          if (sec.task_config) {
-            try {
-              const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
-              if (config.question_groups) {
-                questionGroups.push(...config.question_groups);
-              }
-            } catch (e) { 
-              // Ignore parse errors
+
+      if (!groupsError && tableGroups?.length > 0) {
+        questionGroups.push(...tableGroups);
+      }
+
+      // Source 2: section task_config
+      for (const sec of listeningSections) {
+        if (sec.task_config) {
+          try {
+            const config = typeof sec.task_config === 'string' ? JSON.parse(sec.task_config) : sec.task_config;
+            if (Array.isArray(config.question_groups)) {
+              questionGroups.push(...config.question_groups);
             }
+          } catch (e) {
+            // Ignore parse errors
           }
         }
-        
-        // Fallback 2: read from exam's modules_config (only if not already loaded from task_config)
-        if (questionGroups.length === 0 && exam.modules_config?.listening_question_groups) {
-          questionGroups.push(...exam.modules_config.listening_question_groups);
-        }
+      }
+
+      // Source 3: exam modules_config
+      if (Array.isArray(exam.modules_config?.listening_question_groups)) {
+        questionGroups.push(
+          ...exam.modules_config.listening_question_groups.filter(g => listeningSectionIds.includes(g.section_id))
+        );
       }
     }
     
@@ -1094,14 +1107,23 @@ export const getExam = async (req, res) => {
     
     if (readingSectionIds.length > 0) {
       // Reading groups are stored in modules_config
-      if (exam.modules_config?.reading_question_groups) {
-        questionGroups.push(...exam.modules_config.reading_question_groups);
+      if (Array.isArray(exam.modules_config?.reading_question_groups)) {
+        questionGroups.push(
+          ...exam.modules_config.reading_question_groups.filter(g => readingSectionIds.includes(g.section_id))
+        );
       }
     }
 
-    // Deduplicate groups by ID
+    // Deduplicate groups by ID (fallback key for legacy groups without id)
     const uniqueGroups = Array.from(
-      new Map(questionGroups.map(g => [g.id, g])).values()
+      new Map(
+        questionGroups
+          .filter(Boolean)
+          .map(g => {
+            const fallbackKey = `${g.section_id || 'section'}:${g.question_type || 'type'}:${g.question_range_start || 'start'}:${g.question_range_end || 'end'}`;
+            return [g.id || fallbackKey, g];
+          })
+      ).values()
     );
 
     res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups: uniqueGroups });
