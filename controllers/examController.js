@@ -2,6 +2,9 @@
 import { supabase } from "../supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
 
+const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB
+const MAX_AUDIO_UPLOAD_MB = 100;
+
 // Upload passage image to Supabase Storage
 export const uploadPassageImage = async (req, res) => {
   try {
@@ -77,9 +80,8 @@ export const uploadListeningAudio = async (req, res) => {
       return res.status(400).json({ error: "No audio file uploaded" });
     }
 
-    const maxAudioSize = 25 * 1024 * 1024; // 25MB
-    if (req.file.size > maxAudioSize) {
-      return res.status(400).json({ error: "Audio file is too large (max 25MB)" });
+    if (req.file.size > MAX_AUDIO_UPLOAD_BYTES) {
+      return res.status(400).json({ error: `Audio file is too large (max ${MAX_AUDIO_UPLOAD_MB}MB)` });
     }
 
     const allowedExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'webm'];
@@ -101,11 +103,19 @@ export const uploadListeningAudio = async (req, res) => {
       console.log('[uploadListeningAudio] Creating bucket:', bucketName);
       const { error: createError } = await supabase.storage.createBucket(bucketName, {
         public: true,
-        fileSizeLimit: 26214400 // 25MB
+        fileSizeLimit: MAX_AUDIO_UPLOAD_BYTES
       });
       if (createError) {
         console.error('[uploadListeningAudio] Failed to create bucket:', createError);
         return res.status(500).json({ error: 'Storage not configured. Please contact administrator.' });
+      }
+    } else {
+      const { error: updateBucketError } = await supabase.storage.updateBucket(bucketName, {
+        public: true,
+        fileSizeLimit: MAX_AUDIO_UPLOAD_BYTES,
+      });
+      if (updateBucketError) {
+        console.warn('[uploadListeningAudio] Could not update bucket file size limit:', updateBucketError.message || updateBucketError);
       }
     }
 
