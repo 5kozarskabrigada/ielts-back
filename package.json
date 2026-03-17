@@ -9,7 +9,8 @@
     "normalize:question-types": "node scripts/normalize-question-types.js",
     "normalize:question-types:apply": "node scripts/normalize-question-types.js --apply",
     "cleanup:duplicate-exams": "node scripts/cleanup-duplicate-exams.js",
-    "cleanup:duplicate-exams:apply": "node scripts/cleanup-duplicate-exams.js --apply"
+    "cleanup:duplicate-exams:apply": "node scripts/cleanup-duplicate-exams.js --apply",
+    "repair:reading-from-duplicate": "node scripts/repair-exam-reading-from-duplicate.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
