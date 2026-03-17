@@ -62,6 +62,79 @@ export const uploadPassageImage = async (req, res) => {
   }
 };
 
+// Upload listening audio to Supabase Storage
+export const uploadListeningAudio = async (req, res) => {
+  try {
+    console.log('[uploadListeningAudio] Request received');
+    console.log('[uploadListeningAudio] File:', req.file ? {
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    } : 'NO FILE');
+
+    if (!req.file) {
+      console.error('[uploadListeningAudio] No file in request');
+      return res.status(400).json({ error: "No audio file uploaded" });
+    }
+
+    const maxAudioSize = 25 * 1024 * 1024; // 25MB
+    if (req.file.size > maxAudioSize) {
+      return res.status(400).json({ error: "Audio file is too large (max 25MB)" });
+    }
+
+    const allowedExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'webm'];
+    const fileNameParts = req.file.originalname.split('.');
+    const ext = (fileNameParts.pop() || '').toLowerCase();
+    const isAudioMime = String(req.file.mimetype || '').toLowerCase().startsWith('audio/');
+    const isAllowedExt = allowedExtensions.includes(ext);
+
+    if (!isAudioMime && !isAllowedExt) {
+      return res.status(400).json({ error: "Invalid audio format. Allowed: mp3, wav, ogg, m4a, aac, webm" });
+    }
+
+    // Check if bucket exists, create if it doesn't
+    const bucketName = 'uploads';
+    const { data: buckets } = await supabase.storage.listBuckets();
+    const bucketExists = buckets?.some(b => b.name === bucketName);
+
+    if (!bucketExists) {
+      console.log('[uploadListeningAudio] Creating bucket:', bucketName);
+      const { error: createError } = await supabase.storage.createBucket(bucketName, {
+        public: true,
+        fileSizeLimit: 26214400 // 25MB
+      });
+      if (createError) {
+        console.error('[uploadListeningAudio] Failed to create bucket:', createError);
+        return res.status(500).json({ error: 'Storage not configured. Please contact administrator.' });
+      }
+    }
+
+    const safeExt = isAllowedExt ? ext : 'mp3';
+    const filename = `listening/audio/${uuidv4()}.${safeExt}`;
+    console.log('[uploadListeningAudio] Uploading to:', filename);
+
+    const { data, error } = await supabase.storage.from('uploads').upload(filename, req.file.buffer, {
+      contentType: req.file.mimetype || 'audio/mpeg',
+      upsert: false
+    });
+
+    if (error) {
+      console.error('[uploadListeningAudio] Supabase upload error:', error);
+      throw error;
+    }
+
+    console.log('[uploadListeningAudio] Upload successful:', data);
+
+    const { data: publicUrlData } = supabase.storage.from('uploads').getPublicUrl(filename);
+    console.log('[uploadListeningAudio] Public URL:', publicUrlData.publicUrl);
+
+    res.json({ url: publicUrlData.publicUrl });
+  } catch (err) {
+    console.error('[uploadListeningAudio] Error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // Helper to check if string is a valid UUID
 const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
@@ -277,12 +350,6 @@ export const saveExamStructure = async (req, res) => {
         });
       }
       
-      // Update exam with mapped question groups
-      await supabase
-        .from("exams")
-        .update({ modules_config: modulesConfig })
-        .eq("id", examId);
-
       // Auto-create question rows for summary_completion blanks (both listening and reading groups)
       const allGroups = [
         ...(modulesConfig.listening_question_groups || []),
@@ -327,6 +394,16 @@ export const saveExamStructure = async (req, res) => {
           }
         }
       }
+    }
+
+    // Persist modules_config (including listening audio settings) regardless of group count
+    const { error: modulesConfigError } = await supabase
+      .from("exams")
+      .update({ modules_config: modulesConfig })
+      .eq("id", examId);
+
+    if (modulesConfigError) {
+      throw new Error(`Failed to update modules config: ${modulesConfigError.message}`);
     }
 
     // 5. Process Questions - batch by new vs existing
