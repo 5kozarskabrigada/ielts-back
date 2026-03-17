@@ -330,6 +330,17 @@ export const saveExamStructure = async (req, res) => {
     }
 
     // 5. Process Questions - batch by new vs existing
+    const groupTypeById = new Map();
+    if (Array.isArray(questionGroups)) {
+      questionGroups.forEach((group) => {
+        if (group?.id && group?.question_type) {
+          const mappedGroupId = idMapping.groups[group.id] || group.id;
+          groupTypeById.set(mappedGroupId, group.question_type);
+          groupTypeById.set(group.id, group.question_type);
+        }
+      });
+    }
+
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
       const mappedGroupId = idMapping.groups[q.group_id] || q.group_id || null;
@@ -346,6 +357,10 @@ export const saveExamStructure = async (req, res) => {
         passage_letter,
         ...extraFields
       } = q;
+      const resolvedQuestionType = (mappedGroupId && groupTypeById.get(mappedGroupId))
+        || question_type
+        || q.type
+        || 'multiple_choice';
       return {
         originalId: id,
         isNew: !isUUID(id),
@@ -353,7 +368,7 @@ export const saveExamStructure = async (req, res) => {
           exam_id: examId,
           section_id: mappedSectionId,
           question_text: question_text || q.text || '',
-          question_type: question_type || q.type || 'multiple_choice',
+          question_type: resolvedQuestionType,
           correct_answer: correct_answer || q.answer || '',
           points: points || 1,
           question_number: question_number || 0,
