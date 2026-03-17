@@ -5,7 +5,7 @@ import { requireRole, authMiddleware } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 const IMAGE_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024; // 10MB
-const AUDIO_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024; // 100MB
+const AUDIO_UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024; // 50MB
 
 const imageUpload = multer({
 	storage: multer.memoryStorage(),
@@ -42,7 +42,7 @@ router.post(
 router.post(
 	"/listening-audio",
 	requireRole("admin"),
-	withSingleUpload(audioUpload, "audio", "Audio file is too large (max 100MB)"),
+	withSingleUpload(audioUpload, "audio", "Audio file is too large (max 50MB)"),
 	uploadListeningAudio
 );
 

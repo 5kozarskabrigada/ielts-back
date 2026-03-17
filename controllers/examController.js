@@ -1,9 +1,145 @@
 // ... existing imports
 import { supabase } from "../supabaseClient.js";
 import { v4 as uuidv4 } from "uuid";
+import jwt from "jsonwebtoken";
+import net from "net";
+import { Readable } from "stream";
 
-const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB
-const MAX_AUDIO_UPLOAD_MB = 100;
+const MAX_AUDIO_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB (project storage cap)
+const MAX_AUDIO_UPLOAD_MB = 50;
+const JWT_SECRET = process.env.JWT_SECRET || "deniznegro-omgithastobe-verysecure";
+
+const isPrivateOrLocalIp = (hostname) => {
+  const normalizedHost = String(hostname || "").toLowerCase();
+  if (!normalizedHost) return true;
+  if (normalizedHost === "localhost") return true;
+
+  const ipVersion = net.isIP(normalizedHost);
+  if (!ipVersion) return false;
+
+  if (ipVersion === 4) {
+    if (normalizedHost.startsWith("10.")) return true;
+    if (normalizedHost.startsWith("127.")) return true;
+    if (normalizedHost.startsWith("192.168.")) return true;
+    if (normalizedHost.startsWith("169.254.")) return true;
+
+    if (normalizedHost.startsWith("172.")) {
+      const octets = normalizedHost.split('.');
+      const secondOctet = Number(octets[1]);
+      if (Number.isFinite(secondOctet) && secondOctet >= 16 && secondOctet <= 31) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  // IPv6 local/private ranges
+  if (normalizedHost === "::1") return true;
+  if (normalizedHost.startsWith("fe80:")) return true; // link-local
+  if (normalizedHost.startsWith("fc") || normalizedHost.startsWith("fd")) return true; // unique local
+
+  return false;
+};
+
+const setProxyResponseHeaders = (sourceHeaders, res) => {
+  const passThroughHeaders = [
+    "content-type",
+    "content-length",
+    "content-range",
+    "accept-ranges",
+    "cache-control",
+    "etag",
+    "last-modified",
+    "content-disposition"
+  ];
+
+  passThroughHeaders.forEach((headerName) => {
+    const value = sourceHeaders.get(headerName);
+    if (value) {
+      res.setHeader(headerName, value);
+    }
+  });
+
+  res.setHeader("x-audio-proxy", "1");
+};
+
+export const proxyListeningAudio = async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const queryToken = typeof req.query.token === 'string' ? req.query.token : null;
+    const token = bearerToken || queryToken;
+
+    if (!token) {
+      return res.status(401).json({ error: "Missing token" });
+    }
+
+    try {
+      jwt.verify(token, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    if (!rawUrl) {
+      return res.status(400).json({ error: "Missing audio URL" });
+    }
+
+    let targetUrl;
+    try {
+      targetUrl = new URL(rawUrl);
+    } catch {
+      return res.status(400).json({ error: "Invalid audio URL" });
+    }
+
+    if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+      return res.status(400).json({ error: "Only HTTP(S) audio URLs are supported" });
+    }
+
+    if (isPrivateOrLocalIp(targetUrl.hostname)) {
+      return res.status(400).json({ error: "Audio URL host is not allowed" });
+    }
+
+    const upstreamHeaders = {};
+    const requestedRange = req.headers.range;
+    if (requestedRange) {
+      upstreamHeaders.Range = requestedRange;
+    }
+
+    const upstreamResponse = await fetch(targetUrl.toString(), {
+      method: "GET",
+      headers: upstreamHeaders,
+      redirect: "follow"
+    });
+
+    if (!upstreamResponse.ok && upstreamResponse.status !== 206) {
+      return res.status(502).json({
+        error: "Failed to fetch audio from source URL",
+        upstreamStatus: upstreamResponse.status
+      });
+    }
+
+    const contentType = upstreamResponse.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().startsWith("audio/")) {
+      return res.status(400).json({ error: "Provided URL did not return an audio resource" });
+    }
+
+    setProxyResponseHeaders(upstreamResponse.headers, res);
+    res.status(upstreamResponse.status);
+
+    if (!upstreamResponse.body) {
+      return res.end();
+    }
+
+    Readable.fromWeb(upstreamResponse.body).pipe(res);
+  } catch (err) {
+    console.error("[proxyListeningAudio] Error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Audio proxy failed" });
+    }
+  }
+};
 
 // Upload passage image to Supabase Storage
 export const uploadPassageImage = async (req, res) => {
@@ -141,7 +277,11 @@ export const uploadListeningAudio = async (req, res) => {
     res.json({ url: publicUrlData.publicUrl });
   } catch (err) {
     console.error('[uploadListeningAudio] Error:', err);
-    res.status(500).json({ error: err.message });
+    const message = String(err?.message || 'Upload failed');
+    if (message.toLowerCase().includes('exceeded the maximum allowed size')) {
+      return res.status(400).json({ error: `Audio file is too large (max ${MAX_AUDIO_UPLOAD_MB}MB)` });
+    }
+    res.status(500).json({ error: message });
   }
 };
 
