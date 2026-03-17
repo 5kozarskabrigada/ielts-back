@@ -294,140 +294,148 @@ export const saveExamStructure = async (req, res) => {
 
     // 4. NOW save question groups to modules_config with MAPPED section IDs and generate UUIDs for temp groups
     const modulesConfig = normalizeModulesConfig(exam.modules_config || {});
-    if (questionGroups && questionGroups.length > 0) {
-      // Generate real UUIDs for any temp groups
-      questionGroups.forEach(g => {
-        if (g.id && g.id.toString().startsWith('temp_group_')) {
-          const realGroupId = uuidv4();
-          idMapping.groups[g.id] = realGroupId;
-          g.id = realGroupId; // Replace temp ID with real UUID
-        }
-      });
-      
-      // Separate groups by module type based on their section
-      const listeningGroupIds = sections.filter(s => s.module_type === 'listening').map(s => idMapping.sections[s.id] || s.id);
-      const readingGroupIds = sections.filter(s => s.module_type === 'reading').map(s => idMapping.sections[s.id] || s.id);
-      
-      const listeningGroups = questionGroups.filter(g => {
-        const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
-        return listeningGroupIds.includes(mappedSectionId);
-      });
-      
-      const readingGroups = questionGroups.filter(g => {
-        const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
-        return readingGroupIds.includes(mappedSectionId);
-      });
-      
-      // Save listening groups
-      if (listeningGroups.length > 0) {
-        modulesConfig.listening_question_groups = listeningGroups.map(g => {
-          const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
-          return {
-            id: g.id, // Now contains real UUID
-            section_id: mappedSectionId,
-            group_order: g.group_order || 1,
-            question_type: g.question_type,
-            question_range_start: g.question_range_start,
-            question_range_end: g.question_range_end,
-            instruction_text: g.instruction_text || null,
-            table_title: g.table_title || null,
-            table_data: g.table_data || null,
-            max_words: g.max_words || null,
-            max_numbers: g.max_numbers || null,
-            answer_format: g.answer_format || 'words_and_numbers',
-            has_example: g.has_example || false,
-            example_data: g.example_data || null,
-            audio_start_time: g.audio_start_time || null,
-            shared_options: g.shared_options || null,
-            image_url: g.image_url || null,
-            image_description: g.image_description || null,
-            layout_type: g.layout_type || null,
-            points_per_question: g.points_per_question || 1,
-            case_sensitive: g.case_sensitive || false,
-            spelling_tolerance: g.spelling_tolerance !== false,
-            summary_data: g.summary_data || null,
-            summary_title: g.summary_title || null
-          };
-        });
+    const deletedGroupIdSet = new Set(Array.isArray(deletedGroupIds) ? deletedGroupIds : []);
+
+    let normalizedQuestionGroups = Array.isArray(questionGroups)
+      ? questionGroups.filter((group) => group && typeof group === "object")
+      : [];
+
+    if (deletedGroupIdSet.size > 0) {
+      normalizedQuestionGroups = normalizedQuestionGroups.filter((group) => !deletedGroupIdSet.has(group.id));
+    }
+
+    normalizedQuestionGroups = normalizedQuestionGroups.map((group) => {
+      if (group.id && group.id.toString().startsWith("temp_group_")) {
+        const realGroupId = uuidv4();
+        idMapping.groups[group.id] = realGroupId;
+        return { ...group, id: realGroupId };
       }
-      
-      // Save reading groups
-      if (readingGroups.length > 0) {
-        modulesConfig.reading_question_groups = readingGroups.map(g => {
-          const mappedSectionId = idMapping.sections[g.section_id] || g.section_id;
-          return {
-            id: g.id, // Now contains real UUID
-            section_id: mappedSectionId,
-            group_order: g.group_order || 1,
-            question_type: g.question_type,
-            question_range_start: g.question_range_start,
-            question_range_end: g.question_range_end,
-            instruction_text: g.instruction_text || null,
-            table_title: g.table_title || null,
-            table_data: g.table_data || null,
-            max_words: g.max_words || null,
-            max_numbers: g.max_numbers || null,
-            answer_format: g.answer_format || 'words_and_numbers',
-            has_example: g.has_example || false,
-            example_data: g.example_data || null,
-            example: g.example || null,
-            headings_list: g.headings_list || null,
-            people_list: g.people_list || null,
-            matching_style: normalizeMatchingStyle(g.matching_style),
-            shared_options: g.shared_options || null,
-            image_url: g.image_url || null,
-            image_description: g.image_description || null,
-            layout_type: g.layout_type || null,
-            points_per_question: g.points_per_question || 1,
-            case_sensitive: g.case_sensitive || false,
-            spelling_tolerance: g.spelling_tolerance !== false,
-            summary_data: g.summary_data || null,
-            summary_title: g.summary_title || null
-          };
-        });
-      }
-      
-      // Auto-create question rows for summary_completion blanks (both listening and reading groups)
-      const allGroups = [
-        ...(modulesConfig.listening_question_groups || []),
-        ...(modulesConfig.reading_question_groups || [])
-      ];
-      for (const group of allGroups) {
-        if (group.question_type === 'summary_completion' && group.summary_data?.text) {
-          const blankCount = (group.summary_data.text.match(/\[BLANK\]/g) || []).length;
-          const answersArr = group.summary_data.answers || [];
-          for (let i = 0; i < blankCount; i++) {
-            const qNum = group.question_range_start + i;
-            // Check if question row already exists for this section + question_number
-            const { data: existing } = await supabase
-              .from("questions")
-              .select("id")
-              .eq("exam_id", examId)
-              .eq("section_id", group.section_id)
-              .eq("question_number", qNum)
-              .limit(1);
-            if (!existing || existing.length === 0) {
-              const correctAnswer = answersArr[i] || '';
-              // Parse alternatives if answer contains slash
-              let mainAnswer = correctAnswer;
-              let alternatives = null;
-              if (typeof correctAnswer === 'string' && correctAnswer.includes('/')) {
-                const parts = correctAnswer.split('/').map(s => s.trim()).filter(Boolean);
-                mainAnswer = parts[0];
-                alternatives = parts.slice(1);
-              }
-              await supabase.from("questions").insert([{
+      return group;
+    });
+
+    // Separate groups by module type based on their section
+    const listeningSectionIds = sections
+      .filter((section) => section.module_type === "listening")
+      .map((section) => idMapping.sections[section.id] || section.id);
+    const readingSectionIds = sections
+      .filter((section) => section.module_type === "reading")
+      .map((section) => idMapping.sections[section.id] || section.id);
+
+    const listeningGroups = normalizedQuestionGroups.filter((group) => {
+      const mappedSectionId = idMapping.sections[group.section_id] || group.section_id;
+      return listeningSectionIds.includes(mappedSectionId);
+    });
+
+    const readingGroups = normalizedQuestionGroups.filter((group) => {
+      const mappedSectionId = idMapping.sections[group.section_id] || group.section_id;
+      return readingSectionIds.includes(mappedSectionId);
+    });
+
+    modulesConfig.listening_question_groups = listeningGroups.map((group) => {
+      const mappedSectionId = idMapping.sections[group.section_id] || group.section_id;
+      return {
+        id: group.id,
+        section_id: mappedSectionId,
+        group_order: group.group_order || 1,
+        question_type: group.question_type,
+        question_range_start: group.question_range_start,
+        question_range_end: group.question_range_end,
+        instruction_text: group.instruction_text || null,
+        table_title: group.table_title || null,
+        table_data: group.table_data || null,
+        max_words: group.max_words || null,
+        max_numbers: group.max_numbers || null,
+        answer_format: group.answer_format || "words_and_numbers",
+        has_example: group.has_example || false,
+        example_data: group.example_data || null,
+        audio_start_time: group.audio_start_time || null,
+        shared_options: group.shared_options || null,
+        image_url: group.image_url || null,
+        image_description: group.image_description || null,
+        layout_type: group.layout_type || null,
+        points_per_question: group.points_per_question || 1,
+        case_sensitive: group.case_sensitive || false,
+        spelling_tolerance: group.spelling_tolerance !== false,
+        summary_data: group.summary_data || null,
+        summary_title: group.summary_title || null,
+      };
+    });
+
+    modulesConfig.reading_question_groups = readingGroups.map((group) => {
+      const mappedSectionId = idMapping.sections[group.section_id] || group.section_id;
+      return {
+        id: group.id,
+        section_id: mappedSectionId,
+        group_order: group.group_order || 1,
+        question_type: group.question_type,
+        question_range_start: group.question_range_start,
+        question_range_end: group.question_range_end,
+        instruction_text: group.instruction_text || null,
+        table_title: group.table_title || null,
+        table_data: group.table_data || null,
+        max_words: group.max_words || null,
+        max_numbers: group.max_numbers || null,
+        answer_format: group.answer_format || "words_and_numbers",
+        has_example: group.has_example || false,
+        example_data: group.example_data || null,
+        example: group.example || null,
+        headings_list: group.headings_list || null,
+        people_list: group.people_list || null,
+        matching_style: normalizeMatchingStyle(group.matching_style),
+        shared_options: group.shared_options || null,
+        image_url: group.image_url || null,
+        image_description: group.image_description || null,
+        layout_type: group.layout_type || null,
+        points_per_question: group.points_per_question || 1,
+        case_sensitive: group.case_sensitive || false,
+        spelling_tolerance: group.spelling_tolerance !== false,
+        summary_data: group.summary_data || null,
+        summary_title: group.summary_title || null,
+      };
+    });
+
+    // Auto-create question rows for summary_completion blanks (both listening and reading groups)
+    const allGroups = [
+      ...(modulesConfig.listening_question_groups || []),
+      ...(modulesConfig.reading_question_groups || []),
+    ];
+    for (const group of allGroups) {
+      if (group.question_type === "summary_completion" && group.summary_data?.text) {
+        const blankCount = (group.summary_data.text.match(/\[BLANK\]/g) || []).length;
+        const answersArr = group.summary_data.answers || [];
+        for (let i = 0; i < blankCount; i++) {
+          const qNum = group.question_range_start + i;
+          // Check if question row already exists for this section + question_number
+          const { data: existing } = await supabase
+            .from("questions")
+            .select("id")
+            .eq("exam_id", examId)
+            .eq("section_id", group.section_id)
+            .eq("question_number", qNum)
+            .limit(1);
+          if (!existing || existing.length === 0) {
+            const correctAnswer = answersArr[i] || "";
+            // Parse alternatives if answer contains slash
+            let mainAnswer = correctAnswer;
+            let alternatives = null;
+            if (typeof correctAnswer === "string" && correctAnswer.includes("/")) {
+              const parts = correctAnswer.split("/").map((s) => s.trim()).filter(Boolean);
+              mainAnswer = parts[0];
+              alternatives = parts.slice(1);
+            }
+            await supabase.from("questions").insert([
+              {
                 exam_id: examId,
                 section_id: group.section_id,
                 question_number: qNum,
                 question_text: `Summary completion blank ${i + 1}`,
-                question_type: 'summary_completion',
+                question_type: "summary_completion",
                 correct_answer: mainAnswer,
                 answer_alternatives: alternatives,
                 points: 1,
-                question_data: { group_id: group.id }
-              }]);
-            }
+                question_data: { group_id: group.id },
+              },
+            ]);
           }
         }
       }
@@ -444,20 +452,68 @@ export const saveExamStructure = async (req, res) => {
     }
 
     // 5. Process Questions - batch by new vs existing
+    const mappedActiveGroups = normalizedQuestionGroups.map((group) => ({
+      ...group,
+      id: idMapping.groups[group.id] || group.id,
+      section_id: idMapping.sections[group.section_id] || group.section_id,
+    }));
+
     const groupTypeById = new Map();
-    if (Array.isArray(questionGroups)) {
-      questionGroups.forEach((group) => {
-        if (group?.id && group?.question_type) {
-          const mappedGroupId = idMapping.groups[group.id] || group.id;
-          groupTypeById.set(mappedGroupId, group.question_type);
-          groupTypeById.set(group.id, group.question_type);
-        }
-      });
-    }
+    const groupsBySection = new Map();
+    mappedActiveGroups.forEach((group) => {
+      if (!group?.id || !group?.question_type) return;
+      groupTypeById.set(group.id, group.question_type);
+
+      if (!groupsBySection.has(group.section_id)) {
+        groupsBySection.set(group.section_id, []);
+      }
+      groupsBySection.get(group.section_id).push(group);
+    });
+
+    groupsBySection.forEach((sectionGroups, sectionId) => {
+      groupsBySection.set(
+        sectionId,
+        [...sectionGroups].sort((a, b) => {
+          const orderA = Number(a.group_order || 0);
+          const orderB = Number(b.group_order || 0);
+          if (orderA !== orderB) return orderA - orderB;
+          const startA = Number(a.question_range_start || 0);
+          const startB = Number(b.question_range_start || 0);
+          return startA - startB;
+        })
+      );
+    });
+
+    const mappedDeletedGroupIds = new Set(
+      Array.from(deletedGroupIdSet).map((groupId) => idMapping.groups[groupId] || groupId)
+    );
 
     const mappedQuestions = questions.map(q => {
       const mappedSectionId = idMapping.sections[q.section_id] || q.section_id;
       const mappedGroupId = idMapping.groups[q.group_id] || q.group_id || null;
+
+      let resolvedGroupId = mappedGroupId;
+      if (!resolvedGroupId || !groupTypeById.has(resolvedGroupId)) {
+        const sectionGroups = groupsBySection.get(mappedSectionId) || [];
+        const questionNumber = Number(q.question_number || 0);
+        const matchingGroups = sectionGroups.filter((group) => {
+          const start = Number(group.question_range_start);
+          const end = Number(group.question_range_end);
+          if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+          return questionNumber >= start && questionNumber <= end;
+        });
+
+        if (matchingGroups.length === 1) {
+          resolvedGroupId = matchingGroups[0].id;
+        } else if (matchingGroups.length > 1) {
+          const explicitType = String(q.question_type || q.type || '').toLowerCase();
+          const typeMatch = explicitType
+            ? matchingGroups.find((group) => String(group.question_type || '').toLowerCase() === explicitType)
+            : null;
+          resolvedGroupId = (typeMatch || matchingGroups[0]).id;
+        }
+      }
+
       const {
         id, section_id, question_text, question_type, correct_answer, points, question_number,
         exam_id, created_at, is_deleted,
@@ -471,7 +527,7 @@ export const saveExamStructure = async (req, res) => {
         passage_letter,
         ...extraFields
       } = q;
-      const resolvedQuestionType = (mappedGroupId && groupTypeById.get(mappedGroupId))
+      const resolvedQuestionType = (resolvedGroupId && groupTypeById.get(resolvedGroupId))
         || question_type
         || q.type
         || 'multiple_choice';
@@ -500,7 +556,7 @@ export const saveExamStructure = async (req, res) => {
           // Store options and group_id in question_data (option columns don't exist in DB)
           question_data: { 
             ...extraFields, 
-            group_id: mappedGroupId,
+            group_id: resolvedGroupId,
             option_a: option_a || null,
             option_b: option_b || null,
             option_c: option_c || null,
@@ -512,6 +568,10 @@ export const saveExamStructure = async (req, res) => {
           }
         }
       };
+    }).filter((question) => {
+      const groupId = question?.payload?.question_data?.group_id;
+      if (!groupId) return true;
+      return !mappedDeletedGroupIds.has(groupId);
     });
 
     const existingQuestions = mappedQuestions.filter(q => !q.isNew);
@@ -558,26 +618,40 @@ export const saveExamStructure = async (req, res) => {
 
     // 6. Update task_config for listening sections (store groups there too as backup)
     const listeningSections = sections.filter(s => s.module_type === 'listening');
-    if (listeningSections.length > 0 && questionGroups?.length > 0) {
-      await Promise.all(listeningSections.map(section => {
+    if (listeningSections.length > 0) {
+      await Promise.all(listeningSections.map(async section => {
         const realSectionId = idMapping.sections[section.id] || section.id;
-        const sectionGroups = questionGroups.filter(g => 
+        const sectionGroups = normalizedQuestionGroups.filter(g => 
           g.section_id === section.id || g.section_id === realSectionId
         );
-        
-        if (sectionGroups.length > 0) {
-          const groupsConfig = {
-            question_groups: sectionGroups.map(g => ({
-              ...g,
-              section_id: realSectionId
-            }))
-          };
-          return supabase
-            .from("exam_sections")
-            .update({ task_config: JSON.stringify(groupsConfig) })
-            .eq("id", realSectionId);
+
+        let existingTaskConfig = {};
+        if (section.task_config) {
+          try {
+            existingTaskConfig = typeof section.task_config === 'string'
+              ? JSON.parse(section.task_config)
+              : section.task_config;
+          } catch {
+            existingTaskConfig = {};
+          }
         }
-        return Promise.resolve();
+
+        const groupsConfig = {
+          ...existingTaskConfig,
+          question_groups: sectionGroups.map(g => ({
+            ...g,
+            section_id: realSectionId
+          }))
+        };
+
+        const { error: taskConfigError } = await supabase
+          .from("exam_sections")
+          .update({ task_config: JSON.stringify(groupsConfig) })
+          .eq("id", realSectionId);
+
+        if (taskConfigError) {
+          warnings.push(`Failed to sync listening task config for section ${realSectionId}: ${taskConfigError.message}`);
+        }
       }));
     }
 
