@@ -190,9 +190,44 @@ export const saveExamStructure = async (req, res) => {
       await supabase.from("questions").update({ is_deleted: true }).in("id", deletedQuestionIds);
     }
 
-    // 3. Process Sections - separate new vs existing for batching
-    const existingSections = sections.filter(s => isUUID(s.id));
-    const newSections = sections.filter(s => !isUUID(s.id));
+    // 3. Process Sections - resolve stale temp IDs by module_type + section_order
+    const { data: persistedSections, error: persistedSectionsError } = await supabase
+      .from("exam_sections")
+      .select("id, module_type, section_order")
+      .eq("exam_id", examId);
+
+    if (persistedSectionsError) {
+      throw new Error(`Failed to load existing sections: ${persistedSectionsError.message}`);
+    }
+
+    const persistedSectionIdByComposite = new Map(
+      (persistedSections || []).map(section => [
+        `${section.module_type}:${Number(section.section_order)}`,
+        section.id
+      ])
+    );
+
+    const existingSections = [];
+    const newSections = [];
+
+    sections.forEach((section) => {
+      const compositeKey = `${section.module_type}:${Number(section.section_order)}`;
+      const resolvedExistingId = isUUID(section.id)
+        ? section.id
+        : persistedSectionIdByComposite.get(compositeKey);
+
+      if (resolvedExistingId) {
+        if (!isUUID(section.id)) {
+          idMapping.sections[section.id] = resolvedExistingId;
+        }
+        existingSections.push({
+          ...section,
+          resolvedId: resolvedExistingId,
+        });
+      } else {
+        newSections.push(section);
+      }
+    });
 
     // Batch update existing sections
     if (existingSections.length > 0) {
@@ -211,7 +246,7 @@ export const saveExamStructure = async (req, res) => {
             instruction: section.instruction || null,
             task_config: section.task_config || null
           })
-          .eq("id", section.id)
+          .eq("id", section.resolvedId)
           .select();
         
         return { data, error };
@@ -252,6 +287,8 @@ export const saveExamStructure = async (req, res) => {
       }
       if (newSection) {
         idMapping.sections[section.id] = newSection.id;
+        const compositeKey = `${section.module_type}:${Number(section.section_order)}`;
+        persistedSectionIdByComposite.set(compositeKey, newSection.id);
       }
     }
 
@@ -930,6 +967,43 @@ export const getExam = async (req, res) => {
 
     exam.modules_config = normalizedModulesConfig;
 
+    const normalizeGroupSectionIds = (groups = [], mergedQuestionList = [], sectionList = []) => {
+      if (!Array.isArray(groups) || groups.length === 0) return [];
+
+      const validSectionIds = new Set((sectionList || []).map(section => section.id));
+      const sectionByGroupIdCounts = new Map();
+
+      (mergedQuestionList || []).forEach((question) => {
+        const groupId = question?.group_id;
+        const sectionId = question?.section_id;
+        if (!groupId || !sectionId || !validSectionIds.has(sectionId)) return;
+
+        if (!sectionByGroupIdCounts.has(groupId)) {
+          sectionByGroupIdCounts.set(groupId, new Map());
+        }
+
+        const countMap = sectionByGroupIdCounts.get(groupId);
+        countMap.set(sectionId, (countMap.get(sectionId) || 0) + 1);
+      });
+
+      const normalizedGroups = groups.map((group) => {
+        if (!group || typeof group !== 'object') return group;
+        if (group.section_id && validSectionIds.has(group.section_id)) return group;
+
+        if (group.id && sectionByGroupIdCounts.has(group.id)) {
+          const sectionCounts = sectionByGroupIdCounts.get(group.id);
+          const bestMatch = Array.from(sectionCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+          if (bestMatch) {
+            return { ...group, section_id: bestMatch };
+          }
+        }
+
+        return group;
+      });
+
+      return normalizedGroups;
+    };
+
     // Check access
     if (role === "student" && exam.status !== "active") {
       return res.status(403).json({ error: "Exam is not active" });
@@ -1040,7 +1114,9 @@ export const getExam = async (req, res) => {
           ).values()
         );
 
-        return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups: uniqueGroups });
+        const normalizedGroups = normalizeGroupSectionIds(uniqueGroups, mergedFallback, sections || []);
+
+        return res.json({ ...exam, sections, questions: sanitizedFallback || [], questionGroups: normalizedGroups });
       }
       throw questionsError;
     }
@@ -1126,7 +1202,9 @@ export const getExam = async (req, res) => {
       ).values()
     );
 
-    res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups: uniqueGroups });
+    const normalizedGroups = normalizeGroupSectionIds(uniqueGroups, mergedQuestions, sections || []);
+
+    res.json({ ...exam, sections, questions: sanitizedQuestions, questionGroups: normalizedGroups });
   } catch (err) {
     console.error(`Get exam error:`, err);
     res.status(500).json({ error: err.message });
