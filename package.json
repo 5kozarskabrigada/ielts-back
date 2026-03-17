@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "normalize:question-types": "node scripts/normalize-question-types.js",
+    "normalize:question-types:apply": "node scripts/normalize-question-types.js --apply"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
