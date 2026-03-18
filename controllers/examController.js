@@ -1657,14 +1657,53 @@ export const submitExam = async (req, res) => {
       return [str];
     };
 
+    const normalizeTriStateAnswer = (value, questionType = '') => {
+      const normalizedType = String(questionType || '').trim().toLowerCase();
+      const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
+
+      if (!normalized) return '';
+
+      if (normalized === 'not_given' || normalized === 'notgiven' || normalized === 'ng') {
+        return 'not_given';
+      }
+
+      if (normalizedType === 'yes_no_not_given') {
+        if (normalized === 'yes' || normalized === 'y' || normalized === 'true' || normalized === 't') return 'yes';
+        if (normalized === 'no' || normalized === 'n' || normalized === 'false' || normalized === 'f') return 'no';
+        return normalized;
+      }
+
+      if (normalizedType === 'true_false_not_given') {
+        if (normalized === 'true' || normalized === 't' || normalized === 'yes' || normalized === 'y') return 'true';
+        if (normalized === 'false' || normalized === 'f' || normalized === 'no' || normalized === 'n') return 'false';
+        return normalized;
+      }
+
+      return normalized;
+    };
+
     questions.forEach(q => {
       try {
         const userAns = remappedAnswers[q.id];
         const moduleType = q.exam_sections?.module_type || 'unknown';
         const qType = q.question_type || '';
+        const normalizedQuestionType = String(qType).trim().toLowerCase();
+        const isTriStateQuestion = normalizedQuestionType === 'true_false_not_given' || normalizedQuestionType === 'yes_no_not_given';
         let isCorrect = false;
         let score = 0;
         let pointsForQuestion = q.points || 1;
+        const normalizedUserTriStateAnswer = isTriStateQuestion
+          ? normalizeTriStateAnswer(userAns, normalizedQuestionType)
+          : '';
+        const normalizedCorrectTriStateAnswer = isTriStateQuestion
+          ? normalizeTriStateAnswer(q.correct_answer, normalizedQuestionType)
+          : '';
+        const userAnswerForRecord = isTriStateQuestion && normalizedUserTriStateAnswer
+          ? normalizedUserTriStateAnswer
+          : userAns;
+        const correctAnswerForRecord = isTriStateQuestion && normalizedCorrectTriStateAnswer
+          ? normalizedCorrectTriStateAnswer
+          : q.correct_answer;
 
         if (userAns !== undefined && userAns !== null && userAns !== '') {
           // For multiple choice multiple, count each correct answer separately
@@ -1682,8 +1721,12 @@ export const submitExam = async (req, res) => {
             // The question is worth N points where N = number of correct answers
             pointsForQuestion = correctAnswers.length;
           } else {
-            const userAnswerLower = String(userAns).trim().toLowerCase();
-            const correctAnswerLower = q.correct_answer ? String(q.correct_answer).trim().toLowerCase() : '';
+            const userAnswerLower = isTriStateQuestion
+              ? normalizedUserTriStateAnswer
+              : String(userAns).trim().toLowerCase();
+            const correctAnswerLower = isTriStateQuestion
+              ? normalizedCorrectTriStateAnswer
+              : (q.correct_answer ? String(q.correct_answer).trim().toLowerCase() : '');
             
             // Check main correct answer
             if (correctAnswerLower && userAnswerLower === correctAnswerLower) {
@@ -1700,7 +1743,10 @@ export const submitExam = async (req, res) => {
               }
               if (Array.isArray(alternatives)) {
                 for (const alt of alternatives) {
-                  if (alt && userAnswerLower === String(alt).trim().toLowerCase()) {
+                  const normalizedAlternative = isTriStateQuestion
+                    ? normalizeTriStateAnswer(alt, normalizedQuestionType)
+                    : String(alt).trim().toLowerCase();
+                  if (normalizedAlternative && userAnswerLower === normalizedAlternative) {
                     isCorrect = true;
                     score = q.points || 1;
                     break;
@@ -1728,8 +1774,8 @@ export const submitExam = async (req, res) => {
           section_id: q.exam_sections?.id || null,
           section_title: q.exam_sections?.title || 'Unknown Section',
           module_type: moduleType,
-          user_answer: userAns,
-          correct_answer: q.correct_answer,
+          user_answer: userAnswerForRecord,
+          correct_answer: correctAnswerForRecord,
           is_correct: isCorrect,
           score
         });
