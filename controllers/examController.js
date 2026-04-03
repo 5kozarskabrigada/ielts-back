@@ -744,26 +744,48 @@ export const saveExamStructure = async (req, res) => {
       }
     }
 
-    // Batch insert new questions
+    // Insert new questions individually to avoid entire batch failing on constraint conflicts
     if (newQuestions.length > 0) {
-      const { data: insertedQuestions, error: insertError } = await supabase
-        .from("questions")
-        .insert(newQuestions.map(q => q.payload))
-        .select();
-      
-      if (insertError) {
-        console.error(`Insert error:`, insertError);
-        warnings.push(`Failed to insert ${newQuestions.length} questions: ${insertError.message}`);
-      }
-      
-      if (insertedQuestions) {
-        // Map old IDs to new IDs (by matching on question_number + section_id)
-        insertedQuestions.forEach((inserted, idx) => {
-          if (newQuestions[idx]) {
-            idMapping.questions[newQuestions[idx].originalId] = inserted.id;
+      let insertedCount = 0;
+      for (const q of newQuestions) {
+        // First try: upsert in case a question with same (exam_id, section_id, question_number) exists
+        const { data: existing } = await supabase
+          .from("questions")
+          .select("id")
+          .eq("exam_id", q.payload.exam_id)
+          .eq("section_id", q.payload.section_id)
+          .eq("question_number", q.payload.question_number)
+          .limit(1);
+
+        if (existing && existing.length > 0) {
+          // Update the existing row instead of inserting a duplicate
+          const { data: updated, error: updateErr } = await supabase
+            .from("questions")
+            .update(q.payload)
+            .eq("id", existing[0].id)
+            .select();
+          if (updateErr) {
+            console.error(`Failed to update existing question ${existing[0].id}:`, updateErr);
+            warnings.push(`Failed to update question #${q.payload.question_number}: ${updateErr.message}`);
+          } else if (updated?.[0]) {
+            idMapping.questions[q.originalId] = updated[0].id;
+            insertedCount++;
           }
-        });
+        } else {
+          const { data: inserted, error: insertErr } = await supabase
+            .from("questions")
+            .insert([q.payload])
+            .select();
+          if (insertErr) {
+            console.error(`Failed to insert question #${q.payload.question_number}:`, insertErr);
+            warnings.push(`Failed to insert question #${q.payload.question_number}: ${insertErr.message}`);
+          } else if (inserted?.[0]) {
+            idMapping.questions[q.originalId] = inserted[0].id;
+            insertedCount++;
+          }
+        }
       }
+      console.log(`Inserted/updated ${insertedCount}/${newQuestions.length} new questions`);
     }
 
     // 6. Update task_config for listening sections (store groups there too as backup)
