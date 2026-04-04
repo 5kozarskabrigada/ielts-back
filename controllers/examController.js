@@ -727,10 +727,15 @@ export const saveExamStructure = async (req, res) => {
     const existingQuestions = mappedQuestions.filter(q => !q.isNew);
     const newQuestions = mappedQuestions.filter(q => q.isNew);
 
+    console.log(`[SaveExam] Total mapped: ${mappedQuestions.length}, existing: ${existingQuestions.length}, new: ${newQuestions.length}`);
+    newQuestions.forEach((q, i) => {
+      console.log(`[SaveExam] New question #${i}: originalId=${q.originalId}, section_id=${q.payload.section_id}, qnum=${q.payload.question_number}, type=${q.payload.question_type}, group_id=${q.payload.question_data?.group_id}`);
+    });
+
     // Batch update existing questions (parallel)
     if (existingQuestions.length > 0) {
       const updateResults = await Promise.all(existingQuestions.map(async q => {
-        const { data, error } = await supabase.from("questions").update(q.payload).eq("id", q.originalId).select();
+        const { data, error } = await supabase.from("questions").update({ ...q.payload, is_deleted: false }).eq("id", q.originalId).select();
         if (error) {
           console.error(`Failed to update question ${q.originalId}:`, error);
         }
@@ -748,6 +753,8 @@ export const saveExamStructure = async (req, res) => {
     if (newQuestions.length > 0) {
       let insertedCount = 0;
       for (const q of newQuestions) {
+        console.log(`[SaveExam] Attempting save for question: section=${q.payload.section_id}, num=${q.payload.question_number}, type=${q.payload.question_type}`);
+        console.log(`[SaveExam] Full payload:`, JSON.stringify(q.payload));
         // First try: upsert in case a question with same (exam_id, section_id, question_number) exists
         const { data: existing } = await supabase
           .from("questions")
@@ -759,9 +766,10 @@ export const saveExamStructure = async (req, res) => {
 
         if (existing && existing.length > 0) {
           // Update the existing row instead of inserting a duplicate
+          // IMPORTANT: Reset is_deleted in case we're reusing a soft-deleted question slot
           const { data: updated, error: updateErr } = await supabase
             .from("questions")
-            .update(q.payload)
+            .update({ ...q.payload, is_deleted: false })
             .eq("id", existing[0].id)
             .select();
           if (updateErr) {
@@ -1747,12 +1755,14 @@ export const submitExam = async (req, res) => {
             // The question is worth N points where N = number of correct answers
             pointsForQuestion = correctAnswers.length;
           } else {
+            // Normalize open-ended answers: trim, lowercase, collapse whitespace
+            const normalizeOpenAnswer = (val) => String(val || '').trim().toLowerCase().replace(/\s+/g, ' ');
             const userAnswerLower = isTriStateQuestion
               ? normalizedUserTriStateAnswer
-              : String(userAns).trim().toLowerCase();
+              : normalizeOpenAnswer(userAns);
             const correctAnswerLower = isTriStateQuestion
               ? normalizedCorrectTriStateAnswer
-              : (q.correct_answer ? String(q.correct_answer).trim().toLowerCase() : '');
+              : normalizeOpenAnswer(q.correct_answer);
             
             // Check main correct answer
             if (correctAnswerLower && userAnswerLower === correctAnswerLower) {
@@ -1771,7 +1781,7 @@ export const submitExam = async (req, res) => {
                 for (const alt of alternatives) {
                   const normalizedAlternative = isTriStateQuestion
                     ? normalizeTriStateAnswer(alt, normalizedQuestionType)
-                    : String(alt).trim().toLowerCase();
+                    : normalizeOpenAnswer(alt);
                   if (normalizedAlternative && userAnswerLower === normalizedAlternative) {
                     isCorrect = true;
                     score = q.points || 1;
