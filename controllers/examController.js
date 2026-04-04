@@ -1760,35 +1760,51 @@ export const submitExam = async (req, res) => {
             const userAnswerLower = isTriStateQuestion
               ? normalizedUserTriStateAnswer
               : normalizeOpenAnswer(userAns);
-            const correctAnswerLower = isTriStateQuestion
-              ? normalizedCorrectTriStateAnswer
-              : normalizeOpenAnswer(q.correct_answer);
-            
-            // Check main correct answer
-            if (correctAnswerLower && userAnswerLower === correctAnswerLower) {
-              isCorrect = true;
-              score = q.points || 1;
+
+            // Open-ended types where "/" in correct_answer means alternative answers
+            const isOpenEndedType = [
+              'short_answer', 'sentence_completion', 'note_completion',
+              'form_completion', 'table_completion', 'summary_completion',
+              'map_labeling', 'diagram_labeling'
+            ].includes(normalizedQuestionType);
+
+            // Build list of all acceptable correct answers
+            const acceptableAnswers = [];
+
+            // Split correct_answer on "/" for open-ended types
+            const rawCorrect = q.correct_answer ? String(q.correct_answer) : '';
+            if (isOpenEndedType && !isTriStateQuestion && rawCorrect.includes('/')) {
+              rawCorrect.split('/').forEach(part => {
+                const n = normalizeOpenAnswer(part);
+                if (n) acceptableAnswers.push(n);
+              });
+            } else {
+              const n = isTriStateQuestion
+                ? normalizedCorrectTriStateAnswer
+                : normalizeOpenAnswer(rawCorrect);
+              if (n) acceptableAnswers.push(n);
             }
-            
-            // Check alternative answers if provided
-            if (!isCorrect && q.answer_alternatives) {
+
+            // Add answer_alternatives
+            if (q.answer_alternatives) {
               let alternatives = q.answer_alternatives;
-              // Handle both string and array formats
               if (typeof alternatives === 'string') {
                 alternatives = alternatives.split('/').map(s => s.trim()).filter(Boolean);
               }
               if (Array.isArray(alternatives)) {
                 for (const alt of alternatives) {
-                  const normalizedAlternative = isTriStateQuestion
+                  const n = isTriStateQuestion
                     ? normalizeTriStateAnswer(alt, normalizedQuestionType)
                     : normalizeOpenAnswer(alt);
-                  if (normalizedAlternative && userAnswerLower === normalizedAlternative) {
-                    isCorrect = true;
-                    score = q.points || 1;
-                    break;
-                  }
+                  if (n) acceptableAnswers.push(n);
                 }
               }
+            }
+
+            // Check user answer against all acceptable answers
+            if (acceptableAnswers.some(a => a === userAnswerLower)) {
+              isCorrect = true;
+              score = q.points || 1;
             }
           }
         }
