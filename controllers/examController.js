@@ -2145,6 +2145,72 @@ export const verifyExamCode = async (req, res) => {
   }
 };
 
+const RETRYABLE_SUPABASE_STATUS_CODES = new Set([502, 503, 504, 522, 524]);
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const extractSupabaseStatusCode = (error) => {
+  const candidates = [
+    error?.status,
+    error?.statusCode,
+    error?.code,
+    error?.cause?.status,
+    error?.cause?.statusCode,
+  ];
+
+  for (const candidate of candidates) {
+    const numericValue = Number(candidate);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+  }
+
+  return null;
+};
+
+const isRetryableSupabaseError = (error) => {
+  const statusCode = extractSupabaseStatusCode(error);
+  if (statusCode && RETRYABLE_SUPABASE_STATUS_CODES.has(statusCode)) {
+    return true;
+  }
+
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("502 bad gateway")
+    || message.includes("503 service unavailable")
+    || message.includes("504 gateway timeout")
+    || message.includes("cloudflare")
+    || message.includes("bad gateway");
+};
+
+const summarizeAutosaveError = (error) => {
+  const statusCode = extractSupabaseStatusCode(error);
+  const rawMessage = String(error?.message || error || "Unknown autosave error").trim();
+  const compactMessage = rawMessage.replace(/\s+/g, " ").slice(0, 200);
+  return statusCode ? `status=${statusCode} message=${compactMessage}` : compactMessage;
+};
+
+const runAutosaveQuery = async (operation, label, options = {}) => {
+  const maxAttempts = options.maxAttempts || 3;
+  const baseDelayMs = options.baseDelayMs || 300;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await operation();
+    if (!result?.error) {
+      return result;
+    }
+
+    if (!isRetryableSupabaseError(result.error) || attempt === maxAttempts) {
+      return result;
+    }
+
+    const waitMs = baseDelayMs * attempt;
+    console.warn(`[autosaveAnswers] Retrying ${label} after transient Supabase error (attempt ${attempt}/${maxAttempts}): ${summarizeAutosaveError(result.error)}`);
+    await delay(waitMs);
+  }
+
+  return { data: null, error: new Error(`Autosave operation failed: ${label}`) };
+};
+
 // Auto-save student answers during exam
 export const autosaveAnswers = async (req, res) => {
   const { id: examId } = req.params;
@@ -2156,12 +2222,15 @@ export const autosaveAnswers = async (req, res) => {
     : parsedIncomingTimestamp.toISOString();
 
   try {
-    const { data: existingSubmission, error: submissionCheckError } = await supabase
-      .from("exam_submissions")
-      .select("id, status")
-      .eq("exam_id", examId)
-      .eq("user_id", userId)
-      .maybeSingle();
+    const { data: existingSubmission, error: submissionCheckError } = await runAutosaveQuery(
+      () => supabase
+        .from("exam_submissions")
+        .select("id, status")
+        .eq("exam_id", examId)
+        .eq("user_id", userId)
+        .maybeSingle(),
+      "load existing submission"
+    );
 
     if (submissionCheckError && submissionCheckError.code !== 'PGRST116') {
       throw submissionCheckError;
@@ -2171,12 +2240,15 @@ export const autosaveAnswers = async (req, res) => {
       return res.status(409).json({ error: "Exam already submitted. Autosave is locked." });
     }
 
-    const { data: existingAutosave, error: existingAutosaveError } = await supabase
-      .from("exam_autosaves")
-      .select("id, last_updated")
-      .eq("exam_id", examId)
-      .eq("user_id", userId)
-      .maybeSingle();
+    const { data: existingAutosave, error: existingAutosaveError } = await runAutosaveQuery(
+      () => supabase
+        .from("exam_autosaves")
+        .select("id, last_updated")
+        .eq("exam_id", examId)
+        .eq("user_id", userId)
+        .maybeSingle(),
+      "load existing autosave"
+    );
 
     if (existingAutosaveError && existingAutosaveError.code !== 'PGRST116') {
       throw existingAutosaveError;
@@ -2206,13 +2278,16 @@ export const autosaveAnswers = async (req, res) => {
     };
 
     if (existingAutosave?.id) {
-      const { data: updatedAutosave, error: updateError } = await supabase
-        .from("exam_autosaves")
-        .update(autosavePayload)
-        .eq("id", existingAutosave.id)
-        .lte("last_updated", incomingTimestamp)
-        .select("id, last_updated")
-        .maybeSingle();
+      const { data: updatedAutosave, error: updateError } = await runAutosaveQuery(
+        () => supabase
+          .from("exam_autosaves")
+          .update(autosavePayload)
+          .eq("id", existingAutosave.id)
+          .lte("last_updated", incomingTimestamp)
+          .select("id, last_updated")
+          .maybeSingle(),
+        "update autosave row"
+      );
 
       if (updateError && updateError.code !== 'PGRST116') throw updateError;
 
@@ -2224,20 +2299,26 @@ export const autosaveAnswers = async (req, res) => {
         });
       }
     } else {
-      const { error: insertError } = await supabase
-        .from("exam_autosaves")
-        .insert([autosavePayload]);
+      const { error: insertError } = await runAutosaveQuery(
+        () => supabase
+          .from("exam_autosaves")
+          .insert([autosavePayload]),
+        "insert autosave row"
+      );
 
       if (insertError) {
         if (insertError.code === '23505') {
-          const { data: retriedAutosave, error: retryUpdateError } = await supabase
-            .from("exam_autosaves")
-            .update(autosavePayload)
-            .eq("exam_id", examId)
-            .eq("user_id", userId)
-            .lte("last_updated", incomingTimestamp)
-            .select("id, last_updated")
-            .maybeSingle();
+          const { data: retriedAutosave, error: retryUpdateError } = await runAutosaveQuery(
+            () => supabase
+              .from("exam_autosaves")
+              .update(autosavePayload)
+              .eq("exam_id", examId)
+              .eq("user_id", userId)
+              .lte("last_updated", incomingTimestamp)
+              .select("id, last_updated")
+              .maybeSingle(),
+            "retry autosave update after conflict"
+          );
 
           if (retryUpdateError && retryUpdateError.code !== 'PGRST116') throw retryUpdateError;
 
@@ -2256,7 +2337,10 @@ export const autosaveAnswers = async (req, res) => {
 
     res.json({ message: "Autosaved", timestamp: incomingTimestamp });
   } catch (err) {
-    console.error("Autosave error:", err);
+    console.error("Autosave error:", summarizeAutosaveError(err));
+    if (isRetryableSupabaseError(err)) {
+      return res.status(503).json({ error: "Autosave temporarily unavailable. Please keep working; retry shortly." });
+    }
     res.status(500).json({ error: err.message });
   }
 };
