@@ -4,6 +4,16 @@ import { supabase } from "../supabaseClient.js";
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
+function safeParseJson(value, fallback = {}) {
+  if (!value) return fallback;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 // Grade writing response using Groq AI
 export const gradeWritingWithAI = async (req, res) => {
   const { submissionId, sectionId, taskNumber, responseText, taskType, taskPrompt, modelAnswer } = req.body;
@@ -16,21 +26,80 @@ export const gradeWritingWithAI = async (req, res) => {
     return res.status(400).json({ error: "No response text provided" });
   }
 
+  const normalizedTaskNumber = Number(taskNumber) || 1;
   const wordCount = responseText.trim().split(/\s+/).length;
-  const isTask1 = taskNumber === 1;
+  const isTask1 = normalizedTaskNumber === 1;
   const minWords = isTask1 ? 150 : 250;
 
   try {
+    let resolvedSectionId = sectionId || null;
+    let resolvedTaskType = taskType;
+    let resolvedTaskPrompt = taskPrompt;
+    let resolvedModelAnswer = modelAnswer;
+
+    const hydrateSectionContext = (section) => {
+      if (!section) return;
+      const taskConfig = safeParseJson(section.task_config);
+      const promptParts = [taskConfig.instructions, taskConfig.prompt, section.content]
+        .map((part) => (typeof part === "string" ? part.trim() : ""))
+        .filter(Boolean);
+
+      if (!resolvedTaskType) {
+        resolvedTaskType = taskConfig.type || section.title || null;
+      }
+      if (!resolvedTaskPrompt && promptParts.length > 0) {
+        resolvedTaskPrompt = promptParts.join("\n\n");
+      }
+      if (!resolvedModelAnswer) {
+        resolvedModelAnswer = taskConfig.modelAnswer || null;
+      }
+      if (!resolvedSectionId) {
+        resolvedSectionId = section.id;
+      }
+    };
+
+    if (submissionId && !resolvedSectionId) {
+      const { data: sub } = await supabase
+        .from("exam_submissions")
+        .select("exam_id")
+        .eq("id", submissionId)
+        .single();
+
+      if (sub?.exam_id) {
+        const { data: sections } = await supabase
+          .from("exam_sections")
+          .select("id, section_order, title, content, task_config")
+          .eq("exam_id", sub.exam_id)
+          .eq("module_type", "writing")
+          .order("section_order", { ascending: true });
+
+        if (sections && sections.length > 0) {
+          const matchedSection = sections[normalizedTaskNumber - 1] || sections[0];
+          hydrateSectionContext(matchedSection);
+        }
+      }
+    }
+
+    if (resolvedSectionId && (!resolvedTaskType || !resolvedTaskPrompt || !resolvedModelAnswer)) {
+      const { data: section } = await supabase
+        .from("exam_sections")
+        .select("id, title, content, task_config")
+        .eq("id", resolvedSectionId)
+        .maybeSingle();
+
+      hydrateSectionContext(section);
+    }
+
     // Construct the AI prompt with detailed IELTS criteria
     const systemPrompt = `You are an expert IELTS examiner with years of experience grading writing tasks. Grade the following IELTS Writing ${isTask1 ? 'Task 1' : 'Task 2'} response strictly according to the official IELTS 9-band descriptors.
 
-TASK TYPE: ${taskType || (isTask1 ? 'Academic Report/Letter' : 'Discursive Essay')}
+TASK TYPE: ${resolvedTaskType || (isTask1 ? 'Academic Report/Letter' : 'Discursive Essay')}
 
 TASK PROMPT:
-${taskPrompt || 'Not provided'}
+${resolvedTaskPrompt || 'Not provided'}
 
-${modelAnswer ? `MODEL ANSWER (for reference only):
-${modelAnswer}` : ''}
+${resolvedModelAnswer ? `MODEL ANSWER (for reference only):
+${resolvedModelAnswer}` : ''}
 
 STUDENT'S RESPONSE:
 ${responseText}
@@ -115,8 +184,6 @@ Respond ONLY with a valid JSON object (no markdown code blocks, no extra text):
 
     // Save to database if submission context provided
     if (submissionId) {
-      // If sectionId is missing, look it up from the exam
-      let resolvedSectionId = sectionId;
       if (!resolvedSectionId) {
         const { data: sub } = await supabase
           .from("exam_submissions")
@@ -132,7 +199,7 @@ Respond ONLY with a valid JSON object (no markdown code blocks, no extra text):
             .order("section_order", { ascending: true });
           if (sections && sections.length > 0) {
             // Match by task number (task 1 = first writing section, task 2 = second, etc.)
-            resolvedSectionId = sections[(taskNumber || 1) - 1]?.id || sections[0]?.id;
+            resolvedSectionId = sections[normalizedTaskNumber - 1]?.id || sections[0]?.id;
           }
         }
       }
@@ -143,14 +210,14 @@ Respond ONLY with a valid JSON object (no markdown code blocks, no extra text):
         .from("writing_responses")
         .select("id")
         .eq("submission_id", submissionId)
-        .eq("task_number", taskNumber)
+        .eq("task_number", normalizedTaskNumber)
         .maybeSingle();
       if (existByTask) existingId = existByTask.id;
 
       const writeData = {
         submission_id: submissionId,
         section_id: resolvedSectionId || null,
-        task_number: taskNumber,
+        task_number: normalizedTaskNumber,
         response_text: responseText,
         word_count: wordCount,
         ai_overall_band: grading.overall_band,
