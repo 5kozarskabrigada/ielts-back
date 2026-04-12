@@ -15,7 +15,15 @@ import monitoringRoutes from "./routes/monitoringRoutes.js";
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-app.use(cors());
+// CORS — explicit config so error responses also include headers
+const corsOptions = {
+  origin: true,            // reflect request origin (same as wildcard but works with credentials)
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization'],
+  credentials: true,
+  maxAge: 86400,           // cache preflight for 24h — reduces OPTIONS round-trips
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -47,4 +55,20 @@ app.get("/api/health", async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+});
+
+// Global error handler — ensures CORS headers are always present even on crashes
+app.use((err, req, res, _next) => {
+  console.error('Unhandled error:', err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Graceful shutdown — release pool on SIGTERM (Render sends this on deploy)
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, closing pool...');
+  const { pool } = await import('./db.js');
+  await pool.end().catch(() => {});
+  process.exit(0);
 });

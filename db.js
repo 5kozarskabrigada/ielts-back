@@ -12,7 +12,8 @@ if (!DATABASE_URL) {
 
 export const pool = new Pool({
   connectionString: DATABASE_URL,
-  max: 50,                       // 50 persistent connections — Neon Launch plan supports this easily
+  max: 20,                       // 20 connections — safe for Render single-instance + Neon pooler
+  min: 2,                        // Keep 2 warm connections ready
   idleTimeoutMillis: 30000,      // Close idle connections after 30s
   connectionTimeoutMillis: 5000, // Fail fast if pool is full instead of hanging
   statement_timeout: 15000,      // Kill any query running > 15s (prevents stuck queries)
