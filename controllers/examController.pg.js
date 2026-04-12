@@ -49,6 +49,13 @@ const setProxyResponseHeaders = (sourceHeaders, res) => {
 
 const isUUID = (str) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 
+// Safely serialize task_config — avoids double-stringifying if already a string
+const serializeTaskConfig = (val) => {
+  if (!val) return null;
+  if (typeof val === 'string') return val;   // already JSON string from frontend
+  return JSON.stringify(val);                // object → JSON string
+};
+
 const normalizeMatchingStyle = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
   return normalized.startsWith('letter') ? 'letters' : 'roman';
@@ -220,7 +227,7 @@ export const saveExamStructure = async (req, res) => {
           [examId, section.module_type, section.section_order, section.title,
            section.content, section.audio_url, section.image_url || null,
            section.image_description || null, section.letter || null,
-           section.instruction || null, section.task_config ? JSON.stringify(section.task_config) : null,
+           section.instruction || null, serializeTaskConfig(section.task_config),
            section.resolvedId]
         )
       ));
@@ -235,7 +242,7 @@ export const saveExamStructure = async (req, res) => {
         [examId, section.module_type, section.section_order, section.title,
          section.content, section.audio_url, section.image_url || null,
          section.image_description || null, section.letter || null,
-         section.instruction || null, section.task_config ? JSON.stringify(section.task_config) : null]
+         section.instruction || null, serializeTaskConfig(section.task_config)]
       );
       if (rows[0]) {
         idMapping.sections[section.id] = rows[0].id;
@@ -755,6 +762,22 @@ export const getExam = async (req, res) => {
     const { rows: sections } = await pool.query(
       `SELECT * FROM exam_sections WHERE exam_id=$1 ORDER BY section_order ASC`, [id]
     );
+
+    // Normalize task_config: unwrap any double-encoded strings so frontend always gets a clean JSON string
+    for (const sec of sections) {
+      if (sec.task_config) {
+        try {
+          let val = sec.task_config;
+          while (typeof val === 'string') {
+            const parsed = JSON.parse(val);
+            if (typeof parsed === 'string') { val = parsed; continue; }
+            // It's an object — re-serialize to a clean single-layer JSON string
+            sec.task_config = JSON.stringify(parsed);
+            break;
+          }
+        } catch { /* leave as-is if unparseable */ }
+      }
+    }
 
     const { rows: rawQuestions } = await pool.query(
       `SELECT * FROM questions WHERE exam_id=$1 AND (is_deleted=false OR is_deleted IS NULL) ORDER BY module_type, question_number`, [id]
