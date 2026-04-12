@@ -1252,76 +1252,45 @@ export const autosaveAnswers = async (req, res) => {
   const incomingTimestamp = Number.isNaN(parsedTs.getTime()) ? new Date().toISOString() : parsedTs.toISOString();
 
   try {
-    // Check for existing submission (exam already submitted?)
-    const { rows: subRows } = await queryWithRetry(
-      `SELECT id, status FROM exam_submissions WHERE exam_id=$1 AND user_id=$2 LIMIT 1`,
-      [examId, userId]
+    // Single-query upsert: insert or update autosave, checking submission status
+    // and stale timestamp all in one round trip.
+    const { rows } = await queryWithRetry(
+      `WITH submission_check AS (
+        SELECT status FROM exam_submissions
+        WHERE exam_id = $1 AND user_id = $2 LIMIT 1
+      )
+      INSERT INTO exam_autosaves (exam_id, user_id, answers_data, current_module, current_part,
+        current_writing_task, time_spent, last_updated)
+      SELECT $1, $2, $3::jsonb, $4, $5, $6, $7::jsonb, $8::timestamptz
+      WHERE NOT EXISTS (
+        SELECT 1 FROM submission_check WHERE status IN ('submitted', 'auto_submitted')
+      )
+      ON CONFLICT (exam_id, user_id) DO UPDATE SET
+        answers_data = EXCLUDED.answers_data,
+        current_module = EXCLUDED.current_module,
+        current_part = EXCLUDED.current_part,
+        current_writing_task = EXCLUDED.current_writing_task,
+        time_spent = EXCLUDED.time_spent,
+        last_updated = EXCLUDED.last_updated
+      WHERE exam_autosaves.last_updated <= EXCLUDED.last_updated
+      RETURNING id, last_updated`,
+      [examId, userId, JSON.stringify(answers), module, currentPart, currentWritingTask,
+       timeSpent ? JSON.stringify(timeSpent) : '{}', incomingTimestamp]
     );
-    const existingSubmission = subRows[0] || null;
-    if (existingSubmission?.status === "submitted" || existingSubmission?.status === "auto_submitted") {
-      return res.status(409).json({ error: "Exam already submitted. Autosave is locked." });
-    }
 
-    // Check for existing autosave row
-    const { rows: autoRows } = await queryWithRetry(
-      `SELECT id, last_updated FROM exam_autosaves WHERE exam_id=$1 AND user_id=$2 LIMIT 1`,
-      [examId, userId]
-    );
-    const existingAutosave = autoRows[0] || null;
-
-    // Reject stale saves
-    if (existingAutosave?.last_updated) {
-      const existingTs = new Date(existingAutosave.last_updated).getTime();
-      const candidateTs = new Date(incomingTimestamp).getTime();
-      if (!Number.isNaN(existingTs) && candidateTs <= existingTs) {
-        return res.json({ message: "Ignored stale autosave", timestamp: existingAutosave.last_updated, ignored: true });
-      }
-    }
-
-    const payload = [examId, userId, JSON.stringify(answers), module, currentPart, currentWritingTask,
-      timeSpent ? JSON.stringify(timeSpent) : null, incomingTimestamp];
-
-    if (existingAutosave?.id) {
-      // Update, but only if incoming timestamp is newer (race guard)
-      const { rows: updated } = await queryWithRetry(
-        `UPDATE exam_autosaves SET answers_data=$3, current_module=$4, current_part=$5,
-         current_writing_task=$6, time_spent=$7, last_updated=$8
-         WHERE id=$9 AND last_updated <= $8
-         RETURNING id, last_updated`,
-        [...payload, existingAutosave.id]
+    if (rows.length === 0) {
+      // Either exam was already submitted or timestamp was stale
+      const { rows: subRows } = await pool.query(
+        `SELECT status FROM exam_submissions WHERE exam_id=$1 AND user_id=$2 LIMIT 1`,
+        [examId, userId]
       );
-      if (updated.length === 0) {
-        return res.json({ message: "Ignored stale autosave", timestamp: incomingTimestamp, ignored: true });
+      if (subRows[0]?.status === "submitted" || subRows[0]?.status === "auto_submitted") {
+        return res.status(409).json({ error: "Exam already submitted. Autosave is locked." });
       }
-    } else {
-      // Insert new autosave row
-      try {
-        await queryWithRetry(
-          `INSERT INTO exam_autosaves (exam_id, user_id, answers_data, current_module, current_part,
-            current_writing_task, time_spent, last_updated)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          payload
-        );
-      } catch (insertErr) {
-        // Unique constraint conflict → update instead
-        if (insertErr.code === '23505') {
-          const { rows: retried } = await queryWithRetry(
-            `UPDATE exam_autosaves SET answers_data=$3, current_module=$4, current_part=$5,
-             current_writing_task=$6, time_spent=$7, last_updated=$8
-             WHERE exam_id=$1 AND user_id=$2 AND last_updated <= $8
-             RETURNING id, last_updated`,
-            payload
-          );
-          if (retried.length === 0) {
-            return res.json({ message: "Ignored stale autosave", timestamp: incomingTimestamp, ignored: true });
-          }
-        } else {
-          throw insertErr;
-        }
-      }
+      return res.json({ message: "Ignored stale autosave", timestamp: incomingTimestamp, ignored: true });
     }
 
-    res.json({ message: "Autosaved", timestamp: incomingTimestamp });
+    res.json({ message: "Autosaved", timestamp: rows[0].last_updated });
   } catch (err) {
     console.error("Autosave error:", err.message);
     res.status(500).json({ error: err.message });
