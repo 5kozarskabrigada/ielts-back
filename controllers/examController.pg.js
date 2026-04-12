@@ -38,8 +38,12 @@ const isPrivateOrLocalIp = (hostname) => {
 };
 
 const setProxyResponseHeaders = (sourceHeaders, res) => {
-  ["content-type","content-length","content-range","accept-ranges","cache-control","etag","last-modified","content-disposition"]
+  ["content-type","content-length","content-range","accept-ranges","etag","last-modified","content-disposition"]
     .forEach((h) => { const v = sourceHeaders.get(h); if (v) res.setHeader(h, v); });
+  // Allow range requests for audio seeking
+  if (!sourceHeaders.get("accept-ranges")) res.setHeader("accept-ranges", "bytes");
+  // Cache audio files for 1 hour to avoid re-proxying on every request
+  res.setHeader("cache-control", "private, max-age=3600, immutable");
   res.setHeader("x-audio-proxy", "1");
 };
 
