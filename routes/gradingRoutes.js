@@ -7,7 +7,7 @@ import {
   getSubmissionsForGrading,
   getSubmissionDetail,
   exportResultsCSV
-} from "../controllers/gradingController.js";
+} from "../controllers/gradingController.pg.js";
 import { authMiddleware, requireRole } from "../middleware/authMiddleware.js";
 
 const router = express.Router();

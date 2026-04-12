@@ -5,7 +5,7 @@ import {
   getExamLogs,
   getAllSubmissions,
   getSubmissionDetails
-} from "../controllers/monitoringController.js";
+} from "../controllers/monitoringController.pg.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
 
 const router = express.Router();

@@ -34,6 +34,17 @@ app.get("/", (req, res) => {
   res.send("IELTS Platform API is running");
 });
 
+// DB health check
+import { checkDbHealth } from "./db.js";
+app.get("/api/health", async (req, res) => {
+  try {
+    const ok = await checkDbHealth();
+    res.json({ status: ok ? "ok" : "degraded", db: ok ? "connected" : "unreachable" });
+  } catch (err) {
+    res.status(503).json({ status: "error", db: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

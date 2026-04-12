@@ -1,5 +1,5 @@
 import express from "express";
-import { login, registerDevAdmin, forgotPassword } from "../controllers/authController.js";
+import { login, registerDevAdmin, forgotPassword } from "../controllers/authController.pg.js";
 
 const router = express.Router();
 

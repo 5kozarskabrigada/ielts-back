@@ -1,5 +1,5 @@
 import express from "express";
-import { createUser, listUsers, updateUser, deleteUser, restoreUser, listDeletedUsers, permanentlyDeleteUser } from "../controllers/userController.js";
+import { createUser, listUsers, updateUser, deleteUser, restoreUser, listDeletedUsers, permanentlyDeleteUser } from "../controllers/userController.pg.js";
 import { authMiddleware, requireRole } from "../middleware/authMiddleware.js";
 
 const router = express.Router();

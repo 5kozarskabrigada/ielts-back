@@ -1,5 +1,5 @@
 import express from "express";
-import { listClassrooms, createClassroom, getClassroom, updateClassroom, deleteClassroom, addStudentToClassroom, removeStudentFromClassroom } from "../controllers/classroomController.js";
+import { listClassrooms, createClassroom, getClassroom, updateClassroom, deleteClassroom, addStudentToClassroom, removeStudentFromClassroom } from "../controllers/classroomController.pg.js";
 import { authMiddleware, requireRole } from "../middleware/authMiddleware.js";
 
 const router = express.Router();

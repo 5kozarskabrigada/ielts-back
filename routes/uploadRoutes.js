@@ -1,6 +1,6 @@
 import express from "express";
 import multer from "multer";
-import { uploadPassageImage, uploadListeningAudio } from "../controllers/examController.js";
+import { uploadPassageImage, uploadListeningAudio } from "../controllers/examController.pg.js";
 import { requireRole, authMiddleware } from "../middleware/authMiddleware.js";
 
 const router = express.Router();

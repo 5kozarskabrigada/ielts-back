@@ -1,6 +1,6 @@
 import express from "express";
-import { listExams, createExam, getExam, addQuestions, submitExam, updateExamStatus, getExamLogs, createSection, saveExamStructure, deleteExam, restoreExam, listDeletedExams, permanentlyDeleteExam, regenerateExamCode, deleteQuestion, restoreQuestion, listDeletedQuestions, permanentlyDeleteQuestion, getExamStats, updateAccessCode, verifyExamCode, autosaveAnswers, logExamEvent, checkExamStatus, proxyListeningAudio } from "../controllers/examController.js";
-import { logViolation } from "../controllers/monitoringController.js";
+import { listExams, createExam, getExam, addQuestions, submitExam, updateExamStatus, getExamLogs, createSection, saveExamStructure, deleteExam, restoreExam, listDeletedExams, permanentlyDeleteExam, regenerateExamCode, deleteQuestion, restoreQuestion, listDeletedQuestions, permanentlyDeleteQuestion, getExamStats, updateAccessCode, verifyExamCode, autosaveAnswers, logExamEvent, checkExamStatus, proxyListeningAudio } from "../controllers/examController.pg.js";
+import { logViolation } from "../controllers/monitoringController.pg.js";
 import { authMiddleware, requireRole } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
