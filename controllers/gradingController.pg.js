@@ -103,23 +103,57 @@ Respond ONLY with valid JSON:
   "key_improvements": ["<1>", "<2>", "<3>"]
 }`;
 
-    const response = await fetch(GROQ_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
-      body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: "You are an expert IELTS examiner. Always respond with valid JSON only, no markdown." },
-          { role: "user", content: systemPrompt }
-        ],
-        temperature: 0.3, max_tokens: 2048,
-      })
-    });
+    const groqPayload = {
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        { role: "system", content: "You are an expert IELTS examiner. Always respond with valid JSON only, no markdown." },
+        { role: "user", content: systemPrompt }
+      ],
+      temperature: 0.3, max_tokens: 2048,
+    };
+
+    let response;
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+      try {
+        response = await fetch(GROQ_API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_API_KEY}` },
+          body: JSON.stringify(groqPayload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (response.ok) break;
+        // Retry on rate-limit or server errors
+        if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
+          const retryAfter = parseInt(response.headers.get('retry-after') || '3', 10);
+          console.warn(`Groq API returned ${response.status}, retrying in ${retryAfter}s (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          await new Promise(r => setTimeout(r, retryAfter * 1000));
+          continue;
+        }
+        break; // Non-retryable error
+      } catch (fetchErr) {
+        clearTimeout(timeout);
+        if (attempt < MAX_RETRIES) {
+          console.warn(`Groq API fetch error: ${fetchErr.message}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        console.error("Groq API fetch failed after retries:", fetchErr);
+        return res.status(504).json({ error: fetchErr.name === 'AbortError' ? "AI grading timed out. Please try again." : "AI service connection failed. Please try again." });
+      }
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       console.error("Groq API Error:", errorData);
-      return res.status(500).json({ error: "AI grading service unavailable: " + (errorData.error?.message || JSON.stringify(errorData)) });
+      return res.status(response.status === 429 ? 429 : 500).json({ 
+        error: response.status === 429 
+          ? "AI grading service is busy. Please wait a moment and try again." 
+          : "AI grading service unavailable: " + (errorData.error?.message || JSON.stringify(errorData))
+      });
     }
 
     const aiResult = await response.json();
