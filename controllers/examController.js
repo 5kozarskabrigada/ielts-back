@@ -1660,6 +1660,102 @@ export const submitExam = async (req, res) => {
       writing: { correct: 0, total: 0 }
     };
 
+    const DEFAULT_LISTENING_BAND_TABLE = [
+      { min: 39, max: 40, band: 9.0 },
+      { min: 37, max: 38, band: 8.5 },
+      { min: 35, max: 36, band: 8.0 },
+      { min: 32, max: 34, band: 7.5 },
+      { min: 30, max: 31, band: 7.0 },
+      { min: 26, max: 29, band: 6.5 },
+      { min: 23, max: 25, band: 6.0 },
+      { min: 18, max: 22, band: 5.5 },
+      { min: 16, max: 17, band: 5.0 },
+      { min: 13, max: 15, band: 4.5 },
+      { min: 10, max: 12, band: 4.0 },
+      { min: 0, max: 9, band: 0.0 },
+    ];
+
+    const DEFAULT_READING_ACADEMIC_BAND_TABLE = [
+      { min: 39, max: 40, band: 9.0 },
+      { min: 37, max: 38, band: 8.5 },
+      { min: 35, max: 36, band: 8.0 },
+      { min: 33, max: 34, band: 7.5 },
+      { min: 30, max: 32, band: 7.0 },
+      { min: 27, max: 29, band: 6.5 },
+      { min: 23, max: 26, band: 6.0 },
+      { min: 19, max: 22, band: 5.5 },
+      { min: 15, max: 18, band: 5.0 },
+      { min: 13, max: 14, band: 4.5 },
+      { min: 10, max: 12, band: 4.0 },
+      { min: 8, max: 9, band: 3.5 },
+      { min: 6, max: 7, band: 3.0 },
+      { min: 4, max: 5, band: 2.5 },
+      { min: 3, max: 3, band: 2.0 },
+      { min: 2, max: 2, band: 1.5 },
+      { min: 1, max: 1, band: 1.0 },
+      { min: 0, max: 0, band: 0.0 },
+    ];
+
+    const normalizeBandTable = (rawTable, fallbackTable) => {
+      let parsed = rawTable;
+      if (typeof parsed === 'string') {
+        try {
+          parsed = JSON.parse(parsed);
+        } catch {
+          parsed = null;
+        }
+      }
+
+      if (!Array.isArray(parsed)) {
+        return [...fallbackTable];
+      }
+
+      const normalized = parsed
+        .map((row) => {
+          const min = Number(row?.min);
+          const max = Number(row?.max);
+          const band = Number(row?.band);
+          if (!Number.isFinite(min) || !Number.isFinite(max) || !Number.isFinite(band)) {
+            return null;
+          }
+          return { min, max, band };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.max - a.max);
+
+      return normalized.length > 0 ? normalized : [...fallbackTable];
+    };
+
+    const getBandFromTable = (correctAnswers, bandTable) => {
+      const numericCorrect = Math.round(Number(correctAnswers) || 0);
+      const matched = bandTable.find((row) => numericCorrect >= row.min && numericCorrect <= row.max);
+      return matched ? matched.band : 0;
+    };
+
+    let listeningBandTable = [...DEFAULT_LISTENING_BAND_TABLE];
+    let readingAcademicBandTable = [...DEFAULT_READING_ACADEMIC_BAND_TABLE];
+
+    try {
+      const { data: scoringConfigRows, error: scoringConfigError } = await supabase
+        .from("scoring_configs")
+        .select("config_key, config_value")
+        .in("config_key", ["ielts_listening_band", "ielts_reading_academic_band"]);
+
+      if (scoringConfigError) {
+        console.warn('[submitExam] Failed to fetch scoring configs, using defaults:', scoringConfigError.message);
+      } else {
+        const configMap = {};
+        (scoringConfigRows || []).forEach((row) => {
+          configMap[row.config_key] = row.config_value;
+        });
+
+        listeningBandTable = normalizeBandTable(configMap.ielts_listening_band, DEFAULT_LISTENING_BAND_TABLE);
+        readingAcademicBandTable = normalizeBandTable(configMap.ielts_reading_academic_band, DEFAULT_READING_ACADEMIC_BAND_TABLE);
+      }
+    } catch (configErr) {
+      console.warn('[submitExam] Unexpected scoring config load error, using defaults:', configErr.message);
+    }
+
     // Helper: normalize multi-select answers to sorted uppercase letters
     const normalizeMultiAnswer = (val) => {
       if (!val) return '';
@@ -1840,11 +1936,18 @@ export const submitExam = async (req, res) => {
     // Calculate band scores for each module
     const scoresByModule = {};
     Object.keys(moduleScores).forEach(module => {
-      if (moduleScores[module].total > 0) {
+      if (moduleScores[module].total <= 0) {
+        scoresByModule[module] = 0;
+        return;
+      }
+
+      if (module === 'listening') {
+        scoresByModule[module] = getBandFromTable(moduleScores[module].correct, listeningBandTable);
+      } else if (module === 'reading') {
+        scoresByModule[module] = getBandFromTable(moduleScores[module].correct, readingAcademicBandTable);
+      } else {
         const percentage = (moduleScores[module].correct / moduleScores[module].total);
         scoresByModule[module] = Math.round(percentage * 9 * 2) / 2; // Round to nearest 0.5
-      } else {
-        scoresByModule[module] = 0;
       }
     });
 
