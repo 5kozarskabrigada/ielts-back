@@ -1,5 +1,56 @@
 import { supabase } from "../supabaseClient.js";
 
+const LISTENING_BAND_TABLE = [
+  { min: 39, max: 40, band: 9.0 },
+  { min: 37, max: 38, band: 8.5 },
+  { min: 35, max: 36, band: 8.0 },
+  { min: 32, max: 34, band: 7.5 },
+  { min: 30, max: 31, band: 7.0 },
+  { min: 26, max: 29, band: 6.5 },
+  { min: 23, max: 25, band: 6.0 },
+  { min: 18, max: 22, band: 5.5 },
+  { min: 16, max: 17, band: 5.0 },
+  { min: 13, max: 15, band: 4.5 },
+  { min: 10, max: 12, band: 4.0 },
+  { min: 7, max: 9, band: 3.5 },
+  { min: 4, max: 6, band: 3.0 },
+  { min: 3, max: 3, band: 2.5 },
+  { min: 2, max: 2, band: 2.0 },
+  { min: 1, max: 1, band: 1.0 },
+  { min: 0, max: 0, band: 0.0 },
+];
+
+const ACADEMIC_READING_BAND_TABLE = [
+  { min: 39, max: 40, band: 9.0 },
+  { min: 37, max: 38, band: 8.5 },
+  { min: 35, max: 36, band: 8.0 },
+  { min: 33, max: 34, band: 7.5 },
+  { min: 30, max: 32, band: 7.0 },
+  { min: 27, max: 29, band: 6.5 },
+  { min: 23, max: 26, band: 6.0 },
+  { min: 19, max: 22, band: 5.5 },
+  { min: 15, max: 18, band: 5.0 },
+  { min: 13, max: 14, band: 4.5 },
+  { min: 10, max: 12, band: 4.0 },
+  { min: 8, max: 9, band: 3.5 },
+  { min: 7, max: 7, band: 3.5 },
+  { min: 6, max: 6, band: 3.0 },
+  { min: 5, max: 5, band: 3.0 },
+  { min: 4, max: 4, band: 3.0 },
+  { min: 3, max: 3, band: 2.5 },
+  { min: 2, max: 2, band: 2.0 },
+  { min: 1, max: 1, band: 1.0 },
+  { min: 0, max: 0, band: 0.0 },
+];
+
+const getBandFromCorrect = (correctAnswers, table) => {
+  const n = Math.round(Number(correctAnswers) || 0);
+  const matched = table.find((row) => n >= row.min && n <= row.max);
+  return matched ? matched.band : 0;
+};
+
+const roundHalf = (value) => Math.round((Number(value) || 0) * 2) / 2;
+
 export const logViolation = async (req, res) => {
   const { id: examId } = req.params;
   const userId = req.user.id;
@@ -188,11 +239,51 @@ export const getAllSubmissions = async (req, res) => {
     // Handle potentially null data
     const submissionsArray = submissions || [];
 
+    const submissionIds = submissionsArray.map((s) => s.id).filter(Boolean);
+    const correctBySubmissionAndModule = {};
+
+    if (submissionIds.length > 0) {
+      const { data: answerRows, error: answerError } = await supabase
+        .from('answers')
+        .select(`
+          submission_id,
+          is_correct,
+          admin_override_correct,
+          questions!inner(
+            exam_sections!inner(
+              module_type
+            )
+          )
+        `)
+        .in('submission_id', submissionIds);
+
+      if (answerError) {
+        console.error('Supabase error fetching answer correctness for submissions:', answerError);
+      } else {
+        (answerRows || []).forEach((row) => {
+          const submissionId = row.submission_id;
+          const moduleType = row.questions?.exam_sections?.module_type;
+          if (!submissionId || (moduleType !== 'listening' && moduleType !== 'reading' && moduleType !== 'writing')) {
+            return;
+          }
+
+          if (!correctBySubmissionAndModule[submissionId]) {
+            correctBySubmissionAndModule[submissionId] = { listening: 0, reading: 0, writing: 0 };
+          }
+
+          const effectiveCorrect = row.admin_override_correct !== null && row.admin_override_correct !== undefined
+            ? row.admin_override_correct
+            : row.is_correct;
+
+          if (effectiveCorrect === true) {
+            correctBySubmissionAndModule[submissionId][moduleType] += 1;
+          }
+        });
+      }
+    }
+
     // Calculate stats
     const totalSubmissions = submissionsArray.length;
-    const avgBandScore = submissionsArray.length > 0
-      ? (submissionsArray.reduce((sum, s) => sum + (s.band_score || 0), 0) / submissionsArray.length).toFixed(1)
-      : 0;
     
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
@@ -201,21 +292,44 @@ export const getAllSubmissions = async (req, res) => {
     const activeExams = new Set(submissionsArray.map(s => s.exam_id)).size;
 
     // Format submissions
-    const formattedSubmissions = submissionsArray.map(sub => ({
-      id: sub.id,
-      user_id: sub.user_id,
-      user_name: sub.users ? `${sub.users.first_name} ${sub.users.last_name}`.trim() : 'Unknown',
-      user_email: sub.users?.email,
-      exam_id: sub.exam_id,
-      exam_title: sub.exams?.title,
-      submitted_at: sub.submitted_at,
-      band_score: sub.band_score,
-      scores_by_module: sub.scores_by_module || {},
-      total_correct: sub.total_correct || 0,
-      total_questions: sub.total_questions || 0,
-      status: sub.status || 'submitted',
-      time_spent: sub.time_spent
-    }));
+    const formattedSubmissions = submissionsArray.map((sub) => {
+      const moduleCorrect = correctBySubmissionAndModule[sub.id] || { listening: 0, reading: 0, writing: 0 };
+      const listeningBand = getBandFromCorrect(moduleCorrect.listening, LISTENING_BAND_TABLE);
+      const readingBand = getBandFromCorrect(moduleCorrect.reading, ACADEMIC_READING_BAND_TABLE);
+      const storedWritingBand = Number(sub?.scores_by_module?.writing);
+      const writingBand = Number.isFinite(storedWritingBand) ? storedWritingBand : null;
+
+      const moduleBandsForOverall = [listeningBand, readingBand, writingBand].filter((v) => Number.isFinite(v));
+      const computedOverallBand = moduleBandsForOverall.length > 0
+        ? roundHalf(moduleBandsForOverall.reduce((sum, value) => sum + value, 0) / moduleBandsForOverall.length)
+        : null;
+
+      return {
+        id: sub.id,
+        user_id: sub.user_id,
+        user_name: sub.users ? `${sub.users.first_name} ${sub.users.last_name}`.trim() : 'Unknown',
+        user_email: sub.users?.email,
+        exam_id: sub.exam_id,
+        exam_title: sub.exams?.title,
+        submitted_at: sub.submitted_at,
+        band_score: computedOverallBand ?? sub.band_score,
+        scores_by_module: {
+          ...(sub.scores_by_module || {}),
+          listening: listeningBand,
+          reading: readingBand,
+        },
+        listening_correct: moduleCorrect.listening,
+        reading_correct: moduleCorrect.reading,
+        total_correct: sub.total_correct || 0,
+        total_questions: sub.total_questions || 0,
+        status: sub.status || 'submitted',
+        time_spent: sub.time_spent
+      };
+    });
+
+    const avgBandScore = totalSubmissions > 0
+      ? (formattedSubmissions.reduce((sum, s) => sum + (parseFloat(s.band_score) || 0), 0) / totalSubmissions).toFixed(1)
+      : 0;
 
     res.json({
       stats: {

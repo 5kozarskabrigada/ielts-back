@@ -1000,7 +1000,12 @@ export const submitExam = async (req, res) => {
       { min: 16, max: 17, band: 5.0 },
       { min: 13, max: 15, band: 4.5 },
       { min: 10, max: 12, band: 4.0 },
-      { min: 0, max: 9, band: 0.0 },
+      { min: 7, max: 9, band: 3.5 },
+      { min: 4, max: 6, band: 3.0 },
+      { min: 3, max: 3, band: 2.5 },
+      { min: 2, max: 2, band: 2.0 },
+      { min: 1, max: 1, band: 1.0 },
+      { min: 0, max: 0, band: 0.0 },
     ];
 
     const DEFAULT_READING_ACADEMIC_BAND_TABLE = [
@@ -1016,10 +1021,12 @@ export const submitExam = async (req, res) => {
       { min: 13, max: 14, band: 4.5 },
       { min: 10, max: 12, band: 4.0 },
       { min: 8, max: 9, band: 3.5 },
-      { min: 6, max: 7, band: 3.0 },
-      { min: 4, max: 5, band: 2.5 },
-      { min: 3, max: 3, band: 2.0 },
-      { min: 2, max: 2, band: 1.5 },
+      { min: 7, max: 7, band: 3.5 },
+      { min: 6, max: 6, band: 3.0 },
+      { min: 5, max: 5, band: 3.0 },
+      { min: 4, max: 4, band: 3.0 },
+      { min: 3, max: 3, band: 2.5 },
+      { min: 2, max: 2, band: 2.0 },
       { min: 1, max: 1, band: 1.0 },
       { min: 0, max: 0, band: 0.0 },
     ];
