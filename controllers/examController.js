@@ -1735,6 +1735,13 @@ export const submitExam = async (req, res) => {
 
     const getBandFromTable = (correctAnswers, bandTable) => {
       const numericCorrect = Math.round(Number(correctAnswers) || 0);
+      if (numericCorrect >= 1 && numericCorrect <= 9) {
+        if (numericCorrect === 1) return 1.0;
+        if (numericCorrect === 2) return 2.0;
+        if (numericCorrect === 3) return 2.5;
+        if (numericCorrect >= 4 && numericCorrect <= 6) return 3.0;
+        return 3.5; // 7-9
+      }
       const matched = bandTable.find((row) => numericCorrect >= row.min && numericCorrect <= row.max);
       return matched ? matched.band : 0;
     };

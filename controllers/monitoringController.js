@@ -45,6 +45,13 @@ const ACADEMIC_READING_BAND_TABLE = [
 
 const getBandFromCorrect = (correctAnswers, table) => {
   const n = Math.round(Number(correctAnswers) || 0);
+  if (n >= 1 && n <= 9) {
+    if (n === 1) return 1.0;
+    if (n === 2) return 2.0;
+    if (n === 3) return 2.5;
+    if (n >= 4 && n <= 6) return 3.0;
+    return 3.5; // 7-9
+  }
   const matched = table.find((row) => n >= row.min && n <= row.max);
   return matched ? matched.band : 0;
 };
