@@ -203,6 +203,7 @@ export const getSubmissionDetails = async (req, res) => {
       .filter(ans => ans.q_id)
       .map(ans => ({
         question_id: ans.question_id,
+        section_id: ans.section_id || null,
         question_number: ans.question_number,
         question_type: ans.question_type,
         question_text: ans.question_text || '',
@@ -224,80 +225,106 @@ export const getSubmissionDetails = async (req, res) => {
       });
 
     const answersByModule = {
-      listening: { correct: 0, wrong: 0, answers: [] },
-      reading: { correct: 0, wrong: 0, answers: [] },
-      writing: { correct: 0, wrong: 0, answers: [] }
+      listening: { correct: 0, wrong: 0, skipped: 0, answers: [] },
+      reading: { correct: 0, wrong: 0, skipped: 0, answers: [] },
+      writing: { correct: 0, wrong: 0, skipped: 0, answers: [] }
     };
 
     answerDetails.forEach(ans => {
       if (answersByModule[ans.module_type]) {
         answersByModule[ans.module_type].answers.push(ans);
-        if (ans.is_correct) answersByModule[ans.module_type].correct++;
-        else answersByModule[ans.module_type].wrong++;
+        if (ans.is_correct === true) answersByModule[ans.module_type].correct++;
+        else if (ans.is_correct === false) answersByModule[ans.module_type].wrong++;
+        else answersByModule[ans.module_type].skipped++;
       }
     });
 
-    // Recover summary_completion answers from raw submission data
+    // Recover group-based answers (summary/table/form/note/map/diagram/sentence)
+    // from raw submission data when DB answer rows are missing.
     const rawSubmissionAnswers = submission.answers;
     if (rawSubmissionAnswers && typeof rawSubmissionAnswers === 'object') {
-      const placeholderKeys = Object.keys(rawSubmissionAnswers).filter(k => k.startsWith('summary_placeholder_'));
-      if (placeholderKeys.length > 0) {
-        const allGroups = [
-          ...(submission.modules_config?.listening_question_groups || []),
-          ...(submission.modules_config?.reading_question_groups || [])
-        ];
+      const allGroups = [
+        ...(submission.modules_config?.listening_question_groups || []),
+        ...(submission.modules_config?.reading_question_groups || [])
+      ];
+
+      const recoverableTypes = new Set([
+        'summary_completion',
+        'table_completion',
+        'form_completion',
+        'note_completion',
+        'map_labeling',
+        'diagram_labeling',
+        'sentence_completion'
+      ]);
+
+      if (allGroups.length > 0) {
         const { rows: examSections } = await pool.query(
           `SELECT id, module_type, title, section_order FROM exam_sections WHERE exam_id = $1`,
           [submission.exam_id]
         );
+
         const sectionMap = {};
-        examSections.forEach(s => { sectionMap[s.id] = s; });
+        examSections.forEach((s) => { sectionMap[s.id] = s; });
 
-        for (const key of placeholderKeys) {
-          const parts = key.replace('summary_placeholder_', '').split('_');
-          const blankIndex = parseInt(parts.pop(), 10);
-          const groupId = parts.join('_');
-          const group = allGroups.find(g => g.id === groupId);
-          if (!group) continue;
+        for (const group of allGroups) {
+          if (!group || !recoverableTypes.has(group.question_type)) continue;
+          const start = Number(group.question_range_start || 0);
+          const end = Number(group.question_range_end || 0);
+          if (!start || !end || end < start) continue;
 
-          const qNum = group.question_range_start + blankIndex;
-          const userAnswer = rawSubmissionAnswers[key];
-          const correctAnswer = group.summary_data?.answers?.[blankIndex] || '';
-          const section = sectionMap[group.section_id];
-          const moduleType = section?.module_type || 'reading';
+          const section = sectionMap[group.section_id] || {};
+          const moduleType = section.module_type || 'reading';
 
-          const alreadyExists = answerDetails.some(a =>
-            a.section_order === (section?.section_order || 0) && a.question_number === qNum
-          );
-          if (alreadyExists) continue;
+          for (let qNum = start; qNum <= end; qNum++) {
+            const blankIndex = qNum - start;
+            const keyCandidates = [
+              `summary_placeholder_${group.id}_${blankIndex}`,
+              `table_${group.id}_blank_${blankIndex}`
+            ];
 
-          const userStr = userAnswer ? String(userAnswer).trim().toLowerCase() : '';
-          let isCorrect = false;
-          if (userStr && correctAnswer) {
-            const correctOptions = String(correctAnswer).split('/').map(s => s.trim().toLowerCase());
-            isCorrect = correctOptions.includes(userStr);
-          }
+            const answerKey = keyCandidates.find((k) => Object.prototype.hasOwnProperty.call(rawSubmissionAnswers, k)) || null;
+            const userAnswer = answerKey ? rawSubmissionAnswers[answerKey] : null;
+            const correctAnswer = group.question_type === 'summary_completion'
+              ? (group.summary_data?.answers?.[blankIndex] || '')
+              : '';
 
-          const entry = {
-            question_id: key,
-            question_number: qNum,
-            question_type: 'summary_completion',
-            question_text: `Summary completion blank ${blankIndex + 1}`,
-            user_answer: userAnswer || null,
-            correct_answer: correctAnswer,
-            is_correct: isCorrect,
-            score: isCorrect ? 1 : 0,
-            module_type: moduleType,
-            section_title: section?.title || 'Unknown',
-            section_order: section?.section_order || 0,
-            options: {}
-          };
+            const alreadyExists = answerDetails.some((a) =>
+              Number(a.question_number) === Number(qNum) &&
+              (a.section_id ? a.section_id === group.section_id : a.section_order === (section.section_order || 0))
+            );
+            if (alreadyExists) continue;
 
-          answerDetails.push(entry);
-          if (answersByModule[moduleType]) {
-            answersByModule[moduleType].answers.push(entry);
-            if (isCorrect) answersByModule[moduleType].correct++;
-            else answersByModule[moduleType].wrong++;
+            let isCorrect = null;
+            if (userAnswer != null && userAnswer !== '' && correctAnswer) {
+              const userStr = String(userAnswer).trim().toLowerCase();
+              const correctOptions = String(correctAnswer).split('/').map((s) => s.trim().toLowerCase()).filter(Boolean);
+              isCorrect = correctOptions.includes(userStr);
+            }
+
+            const entry = {
+              question_id: answerKey || `recovered_${group.id}_${blankIndex}`,
+              section_id: group.section_id || null,
+              question_number: qNum,
+              question_type: group.question_type,
+              question_text: `${group.question_type.replace(/_/g, ' ')} item ${qNum}`,
+              user_answer: userAnswer,
+              correct_answer: correctAnswer,
+              is_correct: isCorrect,
+              score: isCorrect === true ? 1 : (isCorrect === false ? 0 : null),
+              module_type: moduleType,
+              section_title: section.title || 'Unknown',
+              section_order: section.section_order || 0,
+              options: {}
+            };
+
+            answerDetails.push(entry);
+            if (answersByModule[moduleType]) {
+              answersByModule[moduleType].answers.push(entry);
+              if (isCorrect === true) answersByModule[moduleType].correct++;
+              else if (isCorrect === false) answersByModule[moduleType].wrong++;
+              else answersByModule[moduleType].skipped++;
+            }
           }
         }
 
