@@ -58,6 +58,17 @@ const getBandFromCorrect = (correctAnswers, table) => {
 
 const roundHalf = (value) => Math.round((Number(value) || 0) * 2) / 2;
 
+const pickWritingBand = (row) => {
+  const candidates = [row?.admin_override_band, row?.final_band, row?.ai_overall_band];
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+};
+
 export const logViolation = async (req, res) => {
   const { id: examId } = req.params;
   const userId = req.user.id;
@@ -184,6 +195,7 @@ export const getAllSubmissions = async (req, res) => {
 
     const submissionIds = submissions.map((s) => s.id).filter(Boolean);
     const correctBySubmissionAndModule = {};
+    const writingBySubmission = {};
 
     if (submissionIds.length > 0) {
       const { rows: answerRows } = await pool.query(
@@ -212,6 +224,25 @@ export const getAllSubmissions = async (req, res) => {
           correctBySubmissionAndModule[submissionId][moduleType] += 1;
         }
       });
+
+      const { rows: writingRows } = await pool.query(
+        `SELECT submission_id, admin_override_band, final_band, ai_overall_band
+         FROM writing_responses
+         WHERE submission_id = ANY($1::uuid[])`,
+        [submissionIds]
+      );
+
+      (writingRows || []).forEach((row) => {
+        const submissionId = row.submission_id;
+        if (!submissionId) return;
+        if (!writingBySubmission[submissionId]) {
+          writingBySubmission[submissionId] = [];
+        }
+        const band = pickWritingBand(row);
+        if (band != null) {
+          writingBySubmission[submissionId].push(band);
+        }
+      });
     }
     
     const oneWeekAgo = new Date();
@@ -223,11 +254,16 @@ export const getAllSubmissions = async (req, res) => {
       const moduleCorrect = correctBySubmissionAndModule[sub.id] || { listening: 0, reading: 0, writing: 0 };
       const listeningBand = getBandFromCorrect(moduleCorrect.listening, LISTENING_BAND_TABLE);
       const readingBand = getBandFromCorrect(moduleCorrect.reading, ACADEMIC_READING_BAND_TABLE);
-      const storedWritingBand = Number(sub?.scores_by_module?.writing);
-      const writingBand = Number.isFinite(storedWritingBand) ? storedWritingBand : null;
+      const writingBands = writingBySubmission[sub.id] || [];
+      const writingBand = writingBands.length > 0
+        ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+        : null;
+      const writingChecked = writingBands.length > 0;
 
-      const moduleBandsForOverall = [listeningBand, readingBand, writingBand].filter((v) => Number.isFinite(v));
-      const computedOverallBand = moduleBandsForOverall.length > 0
+      const moduleBandsForOverall = writingChecked
+        ? [listeningBand, readingBand, writingBand].filter((v) => Number.isFinite(v))
+        : [];
+      const computedOverallBand = moduleBandsForOverall.length === 3
         ? roundHalf(moduleBandsForOverall.reduce((sum, value) => sum + value, 0) / moduleBandsForOverall.length)
         : null;
 
@@ -239,12 +275,14 @@ export const getAllSubmissions = async (req, res) => {
         exam_id: sub.exam_id,
         exam_title: sub.exam_title,
         submitted_at: sub.submitted_at,
-        band_score: computedOverallBand ?? sub.band_score,
+        band_score: computedOverallBand,
         scores_by_module: {
           ...(sub.scores_by_module || {}),
           listening: listeningBand,
           reading: readingBand,
+          writing: writingChecked ? writingBand : null,
         },
+        writing_checked: writingChecked,
         listening_correct: moduleCorrect.listening,
         reading_correct: moduleCorrect.reading,
         total_correct: sub.total_correct || 0,
@@ -255,7 +293,11 @@ export const getAllSubmissions = async (req, res) => {
     });
 
     const avgBandScore = totalSubmissions > 0
-      ? (formattedSubmissions.reduce((sum, s) => sum + (parseFloat(s.band_score) || 0), 0) / totalSubmissions).toFixed(1)
+      ? (() => {
+          const graded = formattedSubmissions.filter((s) => Number.isFinite(Number(s.band_score)));
+          if (graded.length === 0) return '-';
+          return (graded.reduce((sum, s) => sum + (parseFloat(s.band_score) || 0), 0) / graded.length).toFixed(1);
+        })()
       : 0;
 
     res.json({
@@ -530,8 +572,31 @@ export const getSubmissionDetails = async (req, res) => {
 
     finalWritingResponses.sort((a, b) => a.task_number - b.task_number);
 
+    const writingBands = finalWritingResponses
+      .map((wr) => pickWritingBand(wr))
+      .filter((value) => value != null);
+    const writingChecked = writingBands.length > 0;
+    const writingBand = writingChecked
+      ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+      : null;
+
+    const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
+    const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
+    const overallBand = writingChecked
+      ? roundHalf((listeningBand + readingBand + writingBand) / 3)
+      : null;
+
     res.json({
       ...submission,
+      band_score: overallBand,
+      overall_band_score: overallBand,
+      scores_by_module: {
+        ...(submission.scores_by_module || {}),
+        listening: listeningBand,
+        reading: readingBand,
+        writing: writingChecked ? writingBand : null,
+      },
+      writing_checked: writingChecked,
       user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
       user_email: submission.user_email,
       exam_title: submission.exam_title,
