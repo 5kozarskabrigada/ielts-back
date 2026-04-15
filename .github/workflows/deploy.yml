@@ -27,8 +27,18 @@ jobs:
             docker compose up -d --build
             docker compose ps
 
-            if ! curl -fsS http://localhost:4000/api/health >/dev/null; then
-              echo "Backend health check failed"
-              docker compose logs --tail=120
-              exit 1
-            fi
+            echo "Waiting for backend health endpoint..."
+            attempt=1
+            max_attempts=20
+            until curl -fsS http://localhost:4000/api/health >/dev/null; do
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "Backend health check failed after ${max_attempts} attempts"
+                docker compose logs --tail=120
+                exit 1
+              fi
+              echo "Health check attempt ${attempt}/${max_attempts} failed; retrying in 3s..."
+              attempt=$((attempt + 1))
+              sleep 3
+            done
+
+            echo "Backend health check passed"
