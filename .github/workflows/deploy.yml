@@ -15,6 +15,20 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
+            set -e
             cd /opt/ielts-back
-            git pull origin main
+            git pull --ff-only origin main
+
+            if [ ! -f .env ]; then
+              echo "Missing /opt/ielts-back/.env on server"
+              exit 1
+            fi
+
             docker compose up -d --build
+            docker compose ps
+
+            if ! curl -fsS http://localhost:4000/api/health >/dev/null; then
+              echo "Backend health check failed"
+              docker compose logs --tail=120
+              exit 1
+            fi
