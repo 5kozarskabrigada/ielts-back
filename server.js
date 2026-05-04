@@ -11,6 +11,7 @@ import classroomRoutes from "./routes/classroomRoutes.js";
 import gradingRoutes from "./routes/gradingRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import monitoringRoutes from "./routes/monitoringRoutes.js";
+import { usageTracker } from "./middleware/usageTracker.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -26,6 +27,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Per-request usage tracking (fire-and-forget, never blocks responses)
+app.use(usageTracker);
 
 // Routes
 app.use("/api/auth", authRoutes);
