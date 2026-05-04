@@ -19,7 +19,9 @@ export const getPerStudentUsage = async (req, res) => {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const from = req.query.from || startOfMonth;
-    const to = req.query.to || now.toISOString();
+    const rawTo = req.query.to || now.toISOString();
+    // If date-only (e.g. "2026-05-04"), pad to end of day so that day's data is included
+    const to = rawTo.length === 10 ? `${rawTo}T23:59:59.999Z` : rawTo;
 
     const { rows } = await pool.query(
       `SELECT
@@ -87,7 +89,8 @@ export const getUsageSummary = async (req, res) => {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const from = req.query.from || startOfMonth;
-    const to = req.query.to || now.toISOString();
+    const rawTo = req.query.to || now.toISOString();
+    const to = rawTo.length === 10 ? `${rawTo}T23:59:59.999Z` : rawTo;
 
     const [byRole, byPath, byDay] = await Promise.all([
       pool.query(
