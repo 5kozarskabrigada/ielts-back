@@ -44,10 +44,9 @@ export const getPerStudentUsage = async (req, res) => {
           SUM(ru.response_time_ms) FILTER (WHERE ru.path LIKE '/api/grading%')::bigint AS grading_ms
        FROM request_usage ru
        JOIN users u ON u.id = ru.user_id
-       WHERE ru.user_role = 'student'
-         AND ru.created_at >= $1
+       WHERE ru.created_at >= $1
          AND ru.created_at <= $2
-       GROUP BY ru.user_id, u.first_name, u.last_name, u.username, u.email
+       GROUP BY ru.user_id, u.first_name, u.last_name, u.username, u.email, ru.user_role
        ORDER BY total_response_ms DESC NULLS LAST`,
       [from, to]
     );
@@ -56,22 +55,31 @@ export const getPerStudentUsage = async (req, res) => {
     const totalMs = rows.reduce((sum, r) => sum + Number(r.total_response_ms || 0), 0);
     const totalRequests = rows.reduce((sum, r) => sum + r.total_requests, 0);
 
-    const students = rows.map((r) => ({
+    const users = rows.map((r) => ({
       ...r,
-      // Each student's share of total activity as a percentage
+      // Each user's share of total activity as a percentage
       pct_of_total_time: totalMs > 0 ? Math.round((Number(r.total_response_ms) / totalMs) * 10000) / 100 : 0,
       pct_of_total_requests: totalRequests > 0 ? Math.round((r.total_requests / totalRequests) * 10000) / 100 : 0,
     }));
 
+    const studentCount = users.filter(u => u.user_role === 'student').length;
+    const adminCount = users.filter(u => u.user_role === 'admin').length;
+    const studentMs = users.filter(u => u.user_role === 'student').reduce((sum, r) => sum + Number(r.total_response_ms || 0), 0);
+    const adminMs = users.filter(u => u.user_role === 'admin').reduce((sum, r) => sum + Number(r.total_response_ms || 0), 0);
+
     res.json({
       period: { from, to },
       totals: {
-        student_count: rows.length,
+        user_count: rows.length,
+        student_count: studentCount,
+        admin_count: adminCount,
         total_requests: totalRequests,
         total_response_ms: totalMs,
         total_response_sec: Math.round(totalMs / 10) / 100,
+        student_response_ms: studentMs,
+        admin_response_ms: adminMs,
       },
-      students,
+      users,
     });
   } catch (err) {
     console.error("[usage] per-student error:", err);
