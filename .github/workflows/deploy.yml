@@ -2,7 +2,7 @@ name: Deploy Backend
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
 
 jobs:
   deploy:
@@ -16,14 +16,22 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             set -e
-            cd /opt/ielts-back
-            git pull --ff-only origin main
+            
+            # Clone repo if it doesn't exist, otherwise pull
+            if [ ! -d "/root/ielts-back" ]; then
+              cd /root
+              git clone https://github.com/5kozarskabrigada/ielts-back.git
+            fi
+            
+            cd /root/ielts-back
+            git pull origin master || git pull origin main
 
             if [ ! -f .env ]; then
-              echo "Missing /opt/ielts-back/.env on server"
+              echo "Missing /root/ielts-back/.env on server"
               exit 1
             fi
 
+            docker compose down
             docker compose up -d --build
             docker compose ps
 
