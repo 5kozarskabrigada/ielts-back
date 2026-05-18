@@ -52,6 +52,10 @@ jobs:
             echo "PLATFORM_NAME=TOEFL Practice Platform" >> .env
             echo "✅ .env file created successfully"
 
+            # Run file migration from Supabase (one-time)
+            echo "🔄 Running file migration from Supabase to local storage..."
+            node scripts/migrate-files-from-supabase.js || echo "⚠️ Migration script failed or no files to migrate"
+
             docker compose down
             docker compose up -d --build
             docker compose ps
