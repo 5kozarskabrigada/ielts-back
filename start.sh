@@ -1,7 +1,14 @@
 #!/bin/sh
+set -e
 
+echo "======================================"
 echo "🔄 Running file migration from Supabase to local storage..."
+echo "======================================"
+
 node scripts/migrate-files-from-supabase.js || echo "⚠️ Migration script failed or no files to migrate"
 
+echo "======================================"
 echo "🚀 Starting backend server..."
-node server.js
+echo "======================================"
+
+exec node server.js
