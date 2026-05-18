@@ -1,14 +1,16 @@
-import { createClient } from "@supabase/supabase-js";
-import dotenv from "dotenv";
-dotenv.config();
+// ⚠️ DEPRECATED: Supabase removed in favor of local file storage
+// This file is kept to prevent import errors in legacy code
+// All file uploads now use local filesystem (backend/uploads/)
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+console.error("❌ ERROR: supabaseClient.js is deprecated. Use local file storage instead.");
+console.error("  Files are now stored in backend/uploads/ and served via /uploads route");
+console.error("  Supabase has been completely removed from this project.");
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error("Missing Supabase environment variables");
-}
+throw new Error(
+  "Supabase dependency removed. This project now uses:\n" +
+  "  • Neon PostgreSQL for database\n" +
+  "  • Local filesystem for file storage (backend/uploads/)\n" +
+  "  • If you see this error, update your imports to remove supabaseClient.js"
+);
 
-console.log("Supabase Client initialized with URL:", supabaseUrl);
-
-export const supabase = createClient(supabaseUrl, supabaseServiceKey);
+export const supabase = null;

@@ -3,6 +3,8 @@ dotenv.config();
 
 import express from "express";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
 import authRoutes from "./routes/authRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import examRoutes from "./routes/examRoutes.js";
@@ -12,6 +14,9 @@ import gradingRoutes from "./routes/gradingRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import monitoringRoutes from "./routes/monitoringRoutes.js";
 import { usageTracker } from "./middleware/usageTracker.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -27,6 +32,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Serve uploaded files (images, audio) as static content
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Per-request usage tracking (fire-and-forget, never blocks responses)
 app.use(usageTracker);

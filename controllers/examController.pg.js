@@ -1,9 +1,16 @@
 import { pool, queryWithRetry } from "../db.js";
-import { supabase } from "../supabaseClient.js"; // kept ONLY for Storage uploads
 import { v4 as uuidv4 } from "uuid";
 import jwt from "jsonwebtoken";
 import net from "net";
 import { Readable } from "stream";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:4000';
 
 const MAX_AUDIO_UPLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_AUDIO_UPLOAD_MB = 50;
@@ -116,18 +123,21 @@ export const proxyListeningAudio = async (req, res) => {
 export const uploadPassageImage = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-    const bucketName = 'uploads';
-    const { data: buckets } = await supabase.storage.listBuckets();
-    if (!buckets?.some(b => b.name === bucketName)) {
-      const { error: createError } = await supabase.storage.createBucket(bucketName, { public: true, fileSizeLimit: 10485760 });
-      if (createError) return res.status(500).json({ error: 'Storage not configured.' });
-    }
+    
+    // Create directory if it doesn't exist
+    const uploadPath = path.join(UPLOAD_DIR, 'reading', 'passages');
+    fs.mkdirSync(uploadPath, { recursive: true });
+    
     const ext = req.file.originalname.split('.').pop();
-    const filename = `reading/passages/${uuidv4()}.${ext}`;
-    const { error } = await supabase.storage.from("uploads").upload(filename, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
-    if (error) throw error;
-    const { data: publicUrlData } = supabase.storage.from("uploads").getPublicUrl(filename);
-    res.json({ url: publicUrlData.publicUrl });
+    const filename = `${uuidv4()}.${ext}`;
+    const filePath = path.join(uploadPath, filename);
+    
+    // Write file to disk
+    fs.writeFileSync(filePath, req.file.buffer);
+    
+    // Return URL pointing to local server
+    const url = `${BACKEND_URL}/uploads/reading/passages/${filename}`;
+    res.json({ url });
   } catch (err) {
     console.error('[uploadPassageImage] Error:', err);
     res.status(500).json({ error: err.message });
@@ -145,21 +155,20 @@ export const uploadListeningAudio = async (req, res) => {
     const isAllowedExt = allowedExtensions.includes(ext);
     if (!isAudioMime && !isAllowedExt) return res.status(400).json({ error: "Invalid audio format." });
 
-    const bucketName = 'uploads';
-    const { data: buckets } = await supabase.storage.listBuckets();
-    if (!buckets?.some(b => b.name === bucketName)) {
-      const { error: createError } = await supabase.storage.createBucket(bucketName, { public: true, fileSizeLimit: MAX_AUDIO_UPLOAD_BYTES });
-      if (createError) return res.status(500).json({ error: 'Storage not configured.' });
-    } else {
-      await supabase.storage.updateBucket(bucketName, { public: true, fileSizeLimit: MAX_AUDIO_UPLOAD_BYTES });
-    }
+    // Create directory if it doesn't exist
+    const uploadPath = path.join(UPLOAD_DIR, 'listening', 'audio');
+    fs.mkdirSync(uploadPath, { recursive: true });
 
     const safeExt = isAllowedExt ? ext : 'mp3';
-    const filename = `listening/audio/${uuidv4()}.${safeExt}`;
-    const { error } = await supabase.storage.from('uploads').upload(filename, req.file.buffer, { contentType: req.file.mimetype || 'audio/mpeg', upsert: false });
-    if (error) throw error;
-    const { data: publicUrlData } = supabase.storage.from('uploads').getPublicUrl(filename);
-    res.json({ url: publicUrlData.publicUrl });
+    const filename = `${uuidv4()}.${safeExt}`;
+    const filePath = path.join(uploadPath, filename);
+    
+    // Write file to disk
+    fs.writeFileSync(filePath, req.file.buffer);
+    
+    // Return URL pointing to local server
+    const url = `${BACKEND_URL}/uploads/listening/audio/${filename}`;
+    res.json({ url });
   } catch (err) {
     console.error('[uploadListeningAudio] Error:', err);
     const message = String(err?.message || 'Upload failed');

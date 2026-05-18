@@ -13,8 +13,6 @@ jobs:
         env:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           EMAIL_HOST: ${{ secrets.EMAIL_HOST }}
           EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
@@ -23,7 +21,7 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: JWT_SECRET,DATABASE_URL,SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,EMAIL_HOST,EMAIL_PORT,EMAIL_USER,EMAIL_PASSWORD
+          envs: JWT_SECRET,DATABASE_URL,EMAIL_HOST,EMAIL_PORT,EMAIL_USER,EMAIL_PASSWORD
           script: |
             set -e
             
@@ -41,10 +39,9 @@ jobs:
             echo "# Generated from GitHub Secrets - $(date)" > .env
             echo "JWT_SECRET=${JWT_SECRET}" >> .env
             echo "DATABASE_URL=${DATABASE_URL}" >> .env
-            echo "SUPABASE_URL=${SUPABASE_URL}" >> .env
-            echo "SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}" >> .env
             echo "PORT=4000" >> .env
             echo "FRONTEND_URL=https://toeflpractice.com" >> .env
+            echo "BACKEND_URL=https://api.toeflpractice.com" >> .env
             echo "" >> .env
             echo "# Email Configuration" >> .env
             echo "EMAIL_HOST=${EMAIL_HOST}" >> .env
