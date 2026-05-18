@@ -7,7 +7,7 @@ const EMAIL_USER = process.env.EMAIL_USER || "info@examroomedu.com";
 const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD || "";
 const EMAIL_SECURE = process.env.EMAIL_SECURE === "true"; // true for 465, false for 587
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
-const PLATFORM_NAME = process.env.PLATFORM_NAME || "TOEFL Practice Platform";
+const PLATFORM_NAME = process.env.PLATFORM_NAME || "ExamRoom";
 
 // Create reusable transporter
 const createTransporter = () => {
@@ -121,7 +121,7 @@ const generateCredentialsEmail = (userData) => {
           <!-- CTA Button -->
           <tr>
             <td style="padding: 0 30px 30px; text-align: center;">
-              <a href="${FRONTEND_URL}/login" 
+              <a href="https://examroomedu.com/2/login" 
                  style="display: inline-block; background: linear-gradient(135deg, #123b71 0%, #1e5a9e 100%); color: #ffffff; text-decoration: none; padding: 14px 40px; border-radius: 6px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 8px rgba(18, 59, 113, 0.2);">
                 Login to Your Account
               </a>
@@ -140,24 +140,7 @@ const generateCredentialsEmail = (userData) => {
                     <ul style="margin: 10px 0; padding-left: 20px; color: #555555; font-size: 14px; line-height: 1.8;">
                       <li>Use your username and password to log in</li>
                       <li>Complete your profile information</li>
-                      <li>Browse available practice exams</li>
-                      <li>Start practicing and track your progress</li>
                     </ul>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- Security Notice -->
-          <tr>
-            <td style="padding: 0 30px 30px;">
-              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
-                <tr>
-                  <td style="padding: 15px;">
-                    <p style="margin: 0; color: #856404; font-size: 13px; line-height: 1.5;">
-                      <strong>🔒 Security Tip:</strong> For your security, we recommend changing your password after your first login.
-                    </p>
                   </td>
                 </tr>
               </table>
@@ -214,15 +197,11 @@ Your account has been successfully created. Here are your login credentials:
 Username: ${userData.username}
 Password: ${userData.password}
 
-Login URL: ${FRONTEND_URL}/login
+Login URL: https://examroomedu.com/2/login
 
 Getting Started:
 • Use your username and password to log in
 • Complete your profile information
-• Browse available practice exams
-• Start practicing and track your progress
-
-Security Tip: For your security, we recommend changing your password after your first login.
 
 If you need any assistance, please contact your administrator.
 
