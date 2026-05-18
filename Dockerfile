@@ -7,6 +7,8 @@ RUN npm install --omit=dev
 
 COPY . .
 
+RUN chmod +x start.sh
+
 EXPOSE 4000
 
-CMD ["node", "server.js"]
+CMD ["./start.sh"]
