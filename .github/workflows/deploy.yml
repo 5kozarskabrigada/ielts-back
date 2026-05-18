@@ -36,22 +36,19 @@ jobs:
 
             # Create .env file from GitHub Secrets
             echo "Creating .env file from GitHub Secrets..."
-            cat > .env << EOF
-# Generated from GitHub Secrets - $(date)
-JWT_SECRET=${JWT_SECRET}
-DATABASE_URL=${DATABASE_URL}
-PORT=4000
-FRONTEND_URL=https://toeflpractice.com
-
-# Email Configuration
-EMAIL_HOST=${EMAIL_HOST}
-EMAIL_PORT=${EMAIL_PORT}
-EMAIL_USER=${EMAIL_USER}
-EMAIL_PASSWORD=${EMAIL_PASSWORD}
-EMAIL_SECURE=false
-PLATFORM_NAME=TOEFL Practice Platform
-EOF
-            
+            echo "# Generated from GitHub Secrets - $(date)" > .env
+            echo "JWT_SECRET=${JWT_SECRET}" >> .env
+            echo "DATABASE_URL=${DATABASE_URL}" >> .env
+            echo "PORT=4000" >> .env
+            echo "FRONTEND_URL=https://toeflpractice.com" >> .env
+            echo "" >> .env
+            echo "# Email Configuration" >> .env
+            echo "EMAIL_HOST=${EMAIL_HOST}" >> .env
+            echo "EMAIL_PORT=${EMAIL_PORT}" >> .env
+            echo "EMAIL_USER=${EMAIL_USER}" >> .env
+            echo "EMAIL_PASSWORD=${EMAIL_PASSWORD}" >> .env
+            echo "EMAIL_SECURE=false" >> .env
+            echo "PLATFORM_NAME=TOEFL Practice Platform" >> .env
             echo "✅ .env file created successfully"
 
             docker compose down
