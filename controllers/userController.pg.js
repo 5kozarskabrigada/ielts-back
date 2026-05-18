@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { pool } from "../db.js";
+import { sendWelcomeEmail } from "../services/emailService.js";
 
 export const listUsers = async (req, res) => {
   const { q } = req.query;
@@ -24,7 +25,7 @@ export const listUsers = async (req, res) => {
 };
 
 export const createUser = async (req, res) => {
-  const { firstName, lastName, email, role = "student", password } = req.body;
+  const { firstName, lastName, email, role = "student", password, sendEmail = false } = req.body;
 
   if (!firstName || !lastName) {
     return res.status(400).json({ error: "First Name and Last Name are required" });
@@ -44,7 +45,31 @@ export const createUser = async (req, res) => {
       [firstName, lastName, email || null, username, passwordHash, role]
     );
 
-    res.status(201).json({ ...rows[0], temp_password: rawPassword });
+    const newUser = rows[0];
+    let emailSent = false;
+
+    // Send email if requested and email is valid (not a placeholder)
+    if (sendEmail && email && email.trim() && !email.includes("@placeholder.local")) {
+      try {
+        await sendWelcomeEmail(email, {
+          firstName,
+          lastName,
+          username,
+          password: rawPassword,
+        });
+        emailSent = true;
+        console.log(`✅ Welcome email sent to ${email} for user ${username}`);
+      } catch (emailError) {
+        console.error(`❌ Failed to send welcome email to ${email}:`, emailError.message);
+        // Don't fail user creation if email fails
+      }
+    }
+
+    res.status(201).json({ 
+      ...newUser, 
+      temp_password: rawPassword,
+      email_sent: emailSent 
+    });
   } catch (err) {
     if (err.code === "23505") {
       return res.status(409).json({ error: "Email or username already exists" });
