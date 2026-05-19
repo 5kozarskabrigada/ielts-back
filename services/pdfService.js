@@ -61,7 +61,34 @@ const getBandFromCorrect = (correctAnswers, table) => {
   const matched = table.find((row) => n >= row.min && n <= row.max);
   return matched ? matched.band : null;
 };
-
+/**
+ * Strip HTML tags from text
+ * @param {string} html - HTML string to clean
+ * @returns {string} - Plain text without HTML tags
+ */
+const stripHtmlTags = (html) => {
+  if (!html) return '';
+  
+  let text = String(html);
+  
+  // Remove HTML tags
+  text = text.replace(/<[^>]*>/g, '');
+  
+  // Decode common HTML entities
+  text = text
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+  
+  // Clean up extra whitespace
+  text = text.replace(/\s+/g, ' ').trim();
+  
+  return text;
+};
 /**
  * Generate PDF report for a submission
  * @param {object} submissionData - Full submission data including answers, writing responses, etc.
@@ -169,9 +196,21 @@ export const generateSubmissionPDF = async (submissionData, outputPath) => {
           }
         }
 
-        const overallBand = submissionData.writing_checked && writingBand != null
-          ? (listeningBand + readingBand + writingBand) / 3
+        // Speaking band from manual entry
+        const speakingBand = submissionData.speaking_band_score 
+          ? Number(submissionData.speaking_band_score) 
           : null;
+
+        // Calculate overall band including speaking if available
+        let overallBand = null;
+        if (submissionData.writing_checked && writingBand != null) {
+          const modules = [listeningBand, readingBand, writingBand];
+          if (speakingBand != null) {
+            modules.push(speakingBand);
+          }
+          const average = modules.reduce((a, b) => a + b, 0) / modules.length;
+          overallBand = Math.round(average * 2) / 2; // Round to nearest 0.5
+        }
 
         // Draw score boxes
         const cardWidth = 110;
@@ -184,6 +223,7 @@ export const generateSubmissionPDF = async (submissionData, outputPath) => {
           { label: 'Listening', value: listeningBand, color: getBandColor(listeningBand) },
           { label: 'Reading', value: readingBand, color: getBandColor(readingBand) },
           { label: 'Writing', value: writingBand, color: getBandColor(writingBand) },
+          { label: 'Speaking', value: speakingBand, color: getBandColor(speakingBand) },
         ];
 
         cards.forEach(card => {

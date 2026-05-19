@@ -582,9 +582,18 @@ export const getSubmissionDetails = async (req, res) => {
 
     const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
     const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
-    const overallBand = writingChecked
-      ? roundHalf((listeningBand + readingBand + writingBand) / 3)
-      : null;
+    const speakingBand = submission.speaking_band_score ? parseFloat(submission.speaking_band_score) : null;
+    
+    // Calculate overall band including speaking if available
+    let overallBand = null;
+    if (writingChecked) {
+      const modules = [listeningBand, readingBand, writingBand];
+      if (speakingBand !== null) {
+        modules.push(speakingBand);
+      }
+      const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+      overallBand = roundHalf(average);
+    }
 
     res.json({
       ...submission,
@@ -595,7 +604,9 @@ export const getSubmissionDetails = async (req, res) => {
         listening: listeningBand,
         reading: readingBand,
         writing: writingChecked ? writingBand : null,
+        speaking: speakingBand,
       },
+      speaking_band_score: speakingBand,
       writing_checked: writingChecked,
       user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
       user_email: submission.user_email,
@@ -778,5 +789,120 @@ export const emailSubmissionPDF = async (req, res) => {
   } catch (error) {
     console.error('Failed to generate/email PDF:', error);
     res.status(500).json({ error: error.message || 'Failed to generate or email PDF' });
+  }
+};
+
+/**
+ * Update speaking band score for a submission
+ */
+export const updateSpeakingScore = async (req, res) => {
+  const { id: submissionId } = req.params;
+  const { speaking_band_score } = req.body;
+
+  // Validate speaking score
+  if (speaking_band_score === null || speaking_band_score === undefined) {
+    return res.status(400).json({ error: 'Speaking band score is required' });
+  }
+
+  const score = parseFloat(speaking_band_score);
+  if (isNaN(score) || score < 0 || score > 9) {
+    return res.status(400).json({ error: 'Speaking band score must be between 0 and 9' });
+  }
+
+  try {
+    // Update the speaking score
+    const { rows } = await pool.query(
+      `UPDATE exam_submissions 
+       SET speaking_band_score = $1
+       WHERE id = $2
+       RETURNING id, speaking_band_score`,
+      [score, submissionId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    // Recalculate overall band score including speaking
+    const { rows: subRows } = await pool.query(
+      `SELECT 
+        es.*,
+        e.id AS exam_id_ref
+      FROM exam_submissions es
+      LEFT JOIN exams e ON es.exam_id = e.id
+      WHERE es.id = $1`,
+      [submissionId]
+    );
+
+    const submission = subRows[0];
+
+    // Get module scores
+    const answersByModule = {
+      listening: { correct: 0 },
+      reading: { correct: 0 }
+    };
+
+    const { rows: answerRows } = await pool.query(
+      `SELECT q.module_type, a.is_correct
+       FROM answers a
+       JOIN questions q ON a.question_id = q.id
+       WHERE a.submission_id = $1`,
+      [submissionId]
+    );
+
+    answerRows.forEach(a => {
+      const mod = a.module_type;
+      if (mod === 'listening' || mod === 'reading') {
+        answersByModule[mod].correct += (a.is_correct ? 1 : 0);
+      }
+    });
+
+    const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
+    const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
+
+    // Get writing band
+    const { rows: writingRows } = await pool.query(
+      `SELECT admin_override_band, final_band, ai_overall_band
+       FROM writing_responses
+       WHERE submission_id = $1`,
+      [submissionId]
+    );
+
+    const writingBands = writingRows.map(pickWritingBand).filter(b => b !== null);
+    const writingBand = writingBands.length > 0
+      ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+      : null;
+
+    const writingChecked = submission.writing_grading_status === 'complete' || 
+                          submission.writing_grading_status === 'admin_reviewed';
+
+    // Calculate overall band including speaking if available
+    let overallBand = null;
+    if (writingChecked && writingBand !== null) {
+      const modules = [listeningBand, readingBand, writingBand];
+      if (score !== null) {
+        modules.push(score); // Include speaking
+      }
+      const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+      overallBand = roundHalf(average);
+    }
+
+    // Update overall band score
+    await pool.query(
+      `UPDATE exam_submissions 
+       SET band_score = $1, overall_band_score = $1
+       WHERE id = $2`,
+      [overallBand, submissionId]
+    );
+
+    res.json({ 
+      success: true, 
+      speaking_band_score: score,
+      band_score: overallBand,
+      message: 'Speaking score updated successfully'
+    });
+  } catch (error) {
+    console.error('Failed to update speaking score:', error);
+    res.status(500).json({ error: error.message || 'Failed to update speaking score' });
   }
 };
