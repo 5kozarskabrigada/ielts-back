@@ -19,14 +19,14 @@ const createTransporter = () => {
   return nodemailer.createTransport({
     host: EMAIL_HOST,
     port: EMAIL_PORT,
-    secure: EMAIL_SECURE,
+    secure: EMAIL_SECURE, // false for port 587 (STARTTLS)
     auth: {
       user: EMAIL_USER,
       pass: EMAIL_PASSWORD,
     },
-    tls: {
-      ciphers: "SSLv3",
-    },
+    requireTLS: true, // Force STARTTLS for Office 365
+    logger: true, // Enable logging
+    debug: true, // Detailed SMTP logs for troubleshooting
   });
 };
 
