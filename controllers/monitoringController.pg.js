@@ -341,7 +341,7 @@ export const getSubmissionDetails = async (req, res) => {
     const { rows: answers } = await pool.query(
       `SELECT a.*,
               q.id AS q_id, q.question_number, q.question_type, q.question_text,
-              q.correct_answer, q.question_data, q.question_template,
+              q.correct_answer, q.question_data, q.question_template, q.label_text,
               s.id AS section_id, s.title AS section_title, s.module_type, s.section_order
        FROM answers a
        LEFT JOIN questions q ON q.id = a.question_id
@@ -360,6 +360,7 @@ export const getSubmissionDetails = async (req, res) => {
         question_type: ans.question_type,
         question_text: ans.question_text || '',
         question_template: ans.question_template || '',
+        label_text: ans.label_text || '',
         user_answer: ans.user_answer,
         correct_answer: ans.correct_answer,
         is_correct: ans.is_correct,
