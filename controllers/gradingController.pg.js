@@ -13,9 +13,19 @@ export const gradeWritingWithAI = async (req, res) => {
   const { submissionId, sectionId, taskNumber, responseText, taskType, taskPrompt, modelAnswer } = req.body;
 
   if (!GROQ_API_KEY) {
+    console.error("\n❌ AI GRADING FAILED: GROQ_API_KEY not configured");
+    console.error("   → Add GROQ_API_KEY environment variable to enable AI grading");
+    console.error("   → Get API key from: https://console.groq.com/keys");
     return res.status(500).json({ error: "GROQ_API_KEY not configured on server" });
   }
+  
+  console.log("🤖 AI Grading Request:");
+  console.log("   → Submission ID:", submissionId || "N/A");
+  console.log("   → Task Number:", taskNumber || 1);
+  console.log("   → Response Length:", responseText?.length || 0, "characters");
+  
   if (!responseText || responseText.trim().length === 0) {
+    console.error("   ❌ No response text provided");
     return res.status(400).json({ error: "No response text provided" });
   }
 
@@ -114,6 +124,7 @@ Respond ONLY with valid JSON:
 
     let response;
     const MAX_RETRIES = 2;
+    console.log("   → Calling Groq API with model: llama-3.3-70b-versatile");
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
@@ -125,11 +136,14 @@ Respond ONLY with valid JSON:
           signal: controller.signal,
         });
         clearTimeout(timeout);
-        if (response.ok) break;
+        if (response.ok) {
+          console.log("   ✅ Groq API responded successfully");
+          break;
+        }
         // Retry on rate-limit or server errors
         if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
           const retryAfter = parseInt(response.headers.get('retry-after') || '3', 10);
-          console.warn(`Groq API returned ${response.status}, retrying in ${retryAfter}s (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          console.warn(`   ⚠️ Groq API returned ${response.status}, retrying in ${retryAfter}s (attempt ${attempt + 1}/${MAX_RETRIES})`);
           await new Promise(r => setTimeout(r, retryAfter * 1000));
           continue;
         }
@@ -137,11 +151,11 @@ Respond ONLY with valid JSON:
       } catch (fetchErr) {
         clearTimeout(timeout);
         if (attempt < MAX_RETRIES) {
-          console.warn(`Groq API fetch error: ${fetchErr.message}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          console.warn(`   ⚠️ Groq API fetch error: ${fetchErr.message}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`);
           await new Promise(r => setTimeout(r, 2000));
           continue;
         }
-        console.error("Groq API fetch failed after retries:", fetchErr);
+        console.error("   ❌ Groq API fetch failed after retries:", fetchErr.message);
         return res.status(504).json({ error: fetchErr.name === 'AbortError' ? "AI grading timed out. Please try again." : "AI service connection failed. Please try again." });
       }
     }
