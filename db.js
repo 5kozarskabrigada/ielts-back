@@ -18,6 +18,9 @@ export const pool = new Pool({
   connectionTimeoutMillis: 5000, // Fail fast if pool is full instead of hanging
   statement_timeout: 15000,      // Kill any query running > 15s (prevents stuck queries)
   ssl: DATABASE_URL.includes('sslmode=') ? { rejectUnauthorized: false } : false,
+  // Keepalive settings to prevent "Connection terminated unexpectedly" errors with Neon
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,  // Start keepalive after 10 seconds
 });
 
 // Log pool connectivity on startup
