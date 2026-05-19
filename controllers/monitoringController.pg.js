@@ -802,7 +802,7 @@ export const emailSubmissionPDF = async (req, res) => {
     await generateSubmissionPDF(fullSubmissionData, pdfPath);
 
     console.log(`📧 Sending PDF to ${submission.user_email}...`);
-    await sendSubmissionPDF(
+    const emailResult = await sendSubmissionPDF(
       submission.user_email,
       fullSubmissionData,
       pdfPath,
@@ -812,6 +812,15 @@ export const emailSubmissionPDF = async (req, res) => {
     // Clean up temporary PDF file
     fs.unlinkSync(pdfPath);
     console.log(`🗑️ Cleaned up temporary PDF file`);
+
+    // Check if email was actually sent
+    if (!emailResult || emailResult.success === false) {
+      return res.status(503).json({ 
+        error: 'Email service not configured',
+        message: emailResult?.message || 'Email sending failed. Please contact administrator.',
+        details: 'EMAIL_PASSWORD environment variable is not set on the server.'
+      });
+    }
 
     res.json({
       success: true,
