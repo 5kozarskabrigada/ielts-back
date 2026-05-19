@@ -604,13 +604,26 @@ export const getSubmissionDetails = async (req, res) => {
 
     finalWritingResponses.sort((a, b) => a.task_number - b.task_number);
 
-    const writingBands = finalWritingResponses
-      .map((wr) => pickWritingBand(wr))
-      .filter((value) => value != null);
-    const writingChecked = writingBands.length > 0;
-    const writingBand = writingChecked
-      ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
-      : null;
+    // Check for manual writing band score override first
+    const manualWritingBand = submission.writing_band_score ? parseFloat(submission.writing_band_score) : null;
+    
+    let writingBand = null;
+    let writingChecked = false;
+    
+    if (manualWritingBand !== null) {
+      // Teacher/admin has manually overridden the writing band
+      writingBand = manualWritingBand;
+      writingChecked = true;
+    } else {
+      // Calculate from AI/admin graded tasks
+      const writingBands = finalWritingResponses
+        .map((wr) => pickWritingBand(wr))
+        .filter((value) => value != null);
+      writingChecked = writingBands.length > 0;
+      writingBand = writingChecked
+        ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+        : null;
+    }
 
     const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
     const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
@@ -639,6 +652,7 @@ export const getSubmissionDetails = async (req, res) => {
         speaking: speakingBand,
       },
       speaking_band_score: speakingBand,
+      writing_band_score: manualWritingBand,
       writing_checked: writingChecked,
       user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
       user_email: submission.user_email,
@@ -945,5 +959,105 @@ export const updateSpeakingScore = async (req, res) => {
   } catch (error) {
     console.error('Failed to update speaking score:', error);
     res.status(500).json({ error: error.message || 'Failed to update speaking score' });
+  }
+};
+
+export const updateWritingScore = async (req, res) => {
+  const { id: submissionId } = req.params;
+  const { writing_band_score } = req.body;
+
+  // Validate writing score
+  if (writing_band_score === null || writing_band_score === undefined) {
+    return res.status(400).json({ error: 'Writing band score is required' });
+  }
+
+  const score = parseFloat(writing_band_score);
+  if (isNaN(score) || score < 0 || score > 9) {
+    return res.status(400).json({ error: 'Writing band score must be between 0 and 9' });
+  }
+
+  try {
+    // Update the writing score
+    const { rows } = await pool.query(
+      `UPDATE exam_submissions 
+       SET writing_band_score = $1
+       WHERE id = $2
+       RETURNING id, writing_band_score`,
+      [score, submissionId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    // Recalculate overall band score including writing
+    const { rows: subRows } = await pool.query(
+      `SELECT 
+        es.*,
+        e.id AS exam_id_ref
+      FROM exam_submissions es
+      LEFT JOIN exams e ON es.exam_id = e.id
+      WHERE es.id = $1`,
+      [submissionId]
+    );
+
+    const submission = subRows[0];
+
+    // Get module scores
+    const answersByModule = {
+      listening: { correct: 0 },
+      reading: { correct: 0 }
+    };
+
+    const { rows: answerRows } = await pool.query(
+      `SELECT q.module_type, a.is_correct
+       FROM answers a
+       JOIN questions q ON a.question_id = q.id
+       WHERE a.submission_id = $1`,
+      [submissionId]
+    );
+
+    answerRows.forEach(a => {
+      const mod = a.module_type;
+      if (mod === 'listening' || mod === 'reading') {
+        answersByModule[mod].correct += (a.is_correct ? 1 : 0);
+      }
+    });
+
+    const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
+    const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
+
+    // Get speaking band
+    const speakingBand = submission.speaking_band_score ? parseFloat(submission.speaking_band_score) : null;
+
+    // Calculate overall band including writing manual override
+    let overallBand = null;
+    const modules = [listeningBand, readingBand];
+    if (score !== null) {
+      modules.push(score); // Include manual writing score
+    }
+    if (speakingBand !== null) {
+      modules.push(speakingBand); // Include speaking if available
+    }
+    const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+    overallBand = roundHalf(average);
+
+    // Update overall band score
+    await pool.query(
+      `UPDATE exam_submissions 
+       SET band_score = $1, overall_band_score = $1
+       WHERE id = $2`,
+      [overallBand, submissionId]
+    );
+
+    res.json({ 
+      success: true, 
+      writing_band_score: score,
+      band_score: overallBand,
+      message: 'Writing score updated successfully'
+    });
+  } catch (error) {
+    console.error('Failed to update writing score:', error);
+    res.status(500).json({ error: error.message || 'Failed to update writing score' });
   }
 };

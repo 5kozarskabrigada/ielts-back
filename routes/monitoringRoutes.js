@@ -6,7 +6,8 @@ import {
   getAllSubmissions,
   getSubmissionDetails,
   emailSubmissionPDF,
-  updateSpeakingScore
+  updateSpeakingScore,
+  updateWritingScore
 } from "../controllers/monitoringController.pg.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
 
@@ -25,5 +26,6 @@ router.get("/submissions/all", getAllSubmissions);
 router.get("/submissions/:id", getSubmissionDetails);
 router.post("/submissions/:id/email-pdf", emailSubmissionPDF);
 router.put("/submissions/:id/speaking-score", updateSpeakingScore);
+router.put("/submissions/:id/writing-score", updateWritingScore);
 
 export default router;
