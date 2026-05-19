@@ -240,7 +240,169 @@ export const testEmailConfiguration = async () => {
   }
 };
 
+/**
+ * Send submission results as PDF attachment
+ * @param {string} toEmail - Recipient email address
+ * @param {object} submissionData - Submission data for email content
+ * @param {string} pdfPath - Path to PDF file
+ * @param {string} pdfFilename - Filename for PDF attachment
+ * @returns {Promise<object>} - Email sending result
+ */
+export const sendSubmissionPDF = async (toEmail, submissionData, pdfPath, pdfFilename) => {
+  const transporter = createTransporter();
+  
+  if (!transporter) {
+    console.log("📧 Email disabled (no EMAIL_PASSWORD). Would have sent to:", toEmail);
+    return { success: false, message: "Email service not configured" };
+  }
+
+  const studentName = submissionData.user_name || 'Student';
+  const examTitle = submissionData.exam_title || 'Exam';
+  const overallBand = submissionData.band_score != null 
+    ? Number(submissionData.band_score).toFixed(1)
+    : 'N/A';
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your ${PLATFORM_NAME} Exam Results</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f4f7fa;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f7fa; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #123b71 0%, #1e5a9e 100%); padding: 40px 30px; text-align: center;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600;">
+                ${PLATFORM_NAME}
+              </h1>
+              <p style="margin: 10px 0 0; color: #e3f2fd; font-size: 14px;">
+                Exam Results Report
+              </p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <h2 style="margin: 0 0 15px; color: #123b71; font-size: 22px; font-weight: 600;">
+                Hello ${studentName}!
+              </h2>
+              <p style="margin: 0 0 20px; color: #555555; font-size: 16px; line-height: 1.6;">
+                Your exam results for <strong>${examTitle}</strong> are now available. Please find your detailed performance report attached as a PDF.
+              </p>
+
+              <!-- Score Summary -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f8f9fa; border: 2px solid #e9ecef; border-radius: 8px; margin: 20px 0;">
+                <tr>
+                  <td style="padding: 25px; text-align: center;">
+                    <p style="margin: 0 0 10px; color: #6c757d; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">
+                      Overall Band Score
+                    </p>
+                    <p style="margin: 0; color: #123b71; font-size: 36px; font-weight: 700;">
+                      ${overallBand}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 20px 0; color: #555555; font-size: 14px; line-height: 1.6;">
+                The attached PDF contains:
+              </p>
+              <ul style="margin: 10px 0; padding-left: 20px; color: #555555; font-size: 14px; line-height: 1.8;">
+                <li>Your overall band score and module-wise scores</li>
+                <li>Detailed answer breakdown for Listening and Reading</li>
+                <li>Writing task scores and feedback (if applicable)</li>
+              </ul>
+            </td>
+          </tr>
+
+          <!-- Attachment Notice -->
+          <tr>
+            <td style="padding: 0 30px 30px;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #e7f3ff; border-left: 4px solid #123b71; border-radius: 4px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0; color: #123b71; font-size: 14px; line-height: 1.5;">
+                      <strong>📎 Attachment:</strong> ${pdfFilename}
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 25px 30px; border-top: 1px solid #e9ecef;">
+              <p style="margin: 0 0 8px; color: #6c757d; font-size: 13px; line-height: 1.5;">
+                Need help? Contact your administrator or visit our support center.
+              </p>
+              <p style="margin: 0; color: #adb5bd; font-size: 12px;">
+                © ${new Date().getFullYear()} ${PLATFORM_NAME}. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+
+  const textContent = `
+${PLATFORM_NAME} - Exam Results Report
+
+Hello ${studentName},
+
+Your exam results for "${examTitle}" are now available.
+
+Overall Band Score: ${overallBand}
+
+The attached PDF contains your detailed performance report including:
+• Your overall band score and module-wise scores
+• Detailed answer breakdown for Listening and Reading
+• Writing task scores and feedback (if applicable)
+
+If you need any assistance, please contact your administrator.
+
+© ${new Date().getFullYear()} ${PLATFORM_NAME}
+  `.trim();
+
+  const mailOptions = {
+    from: `"${PLATFORM_NAME}" <${EMAIL_USER}>`,
+    to: toEmail,
+    subject: `Your ${examTitle} Results - ${PLATFORM_NAME}`,
+    html: htmlContent,
+    text: textContent,
+    attachments: [
+      {
+        filename: pdfFilename,
+        path: pdfPath,
+      },
+    ],
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`✅ Submission PDF email sent to ${toEmail} (Message ID: ${info.messageId})`);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`❌ Failed to send submission PDF to ${toEmail}:`, error.message);
+    throw error;
+  }
+};
+
 export default {
   sendWelcomeEmail,
+  sendSubmissionPDF,
   testEmailConfiguration,
 };

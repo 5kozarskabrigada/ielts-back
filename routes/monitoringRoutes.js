@@ -4,7 +4,8 @@ import {
   getAllLogs, 
   getExamLogs,
   getAllSubmissions,
-  getSubmissionDetails
+  getSubmissionDetails,
+  emailSubmissionPDF
 } from "../controllers/monitoringController.pg.js";
 import { authMiddleware } from "../middleware/authMiddleware.js";
 
@@ -21,5 +22,6 @@ router.get("/logs/exam/:examId", getExamLogs);
 // Submissions endpoints
 router.get("/submissions/all", getAllSubmissions);
 router.get("/submissions/:id", getSubmissionDetails);
+router.post("/submissions/:id/email-pdf", emailSubmissionPDF);
 
 export default router;

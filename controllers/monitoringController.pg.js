@@ -611,3 +611,172 @@ export const getSubmissionDetails = async (req, res) => {
     res.status(500).json({ error: error.message || 'Failed to fetch submission details' });
   }
 };
+
+/**
+ * Generate PDF and email submission results to student
+ */
+export const emailSubmissionPDF = async (req, res) => {
+  const { id: submissionId } = req.params;
+
+  try {
+    // Import services (dynamic import to avoid circular dependencies)
+    const { generateSubmissionPDF, generatePDFFilename } = await import('../services/pdfService.js');
+    const { sendSubmissionPDF } = await import('../services/emailService.js');
+    const fs = await import('fs');
+    const path = await import('path');
+    const { fileURLToPath } = await import('url');
+
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    // Fetch full submission data (reusing logic from getSubmissionDetails)
+    const { rows: subRows } = await pool.query(
+      `SELECT 
+        es.*,
+        u.id AS user_id_ref,
+        u.first_name, 
+        u.last_name, 
+        u.email AS user_email,
+        e.id AS exam_id_ref,
+        e.title AS exam_title,
+        e.time_limit
+      FROM exam_submissions es
+      LEFT JOIN users u ON es.user_id = u.id
+      LEFT JOIN exams e ON es.exam_id = e.id
+      WHERE es.id = $1`,
+      [submissionId]
+    );
+
+    if (subRows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    const submission = subRows[0];
+
+    if (!submission.user_email) {
+      return res.status(400).json({ error: 'Student email not found' });
+    }
+
+    // Fetch answers
+    const { rows: answerDetails } = await pool.query(
+      `SELECT 
+        a.*,
+        q.question_number,
+        q.question_text,
+        q.question_type,
+        q.correct_answer,
+        es.module_type,
+        es.title AS section_title
+      FROM answers a
+      LEFT JOIN questions q ON a.question_id = q.id
+      LEFT JOIN exam_sections es ON q.section_id = es.id
+      WHERE a.submission_id = $1
+      ORDER BY q.question_number`,
+      [submissionId]
+    );
+
+    // Group answers by module
+    const answersByModule = {
+      listening: { answers: [], correct: 0, total: 0 },
+      reading: { answers: [], correct: 0, total: 0 },
+      writing: { answers: [], correct: 0, total: 0 },
+    };
+
+    answerDetails.forEach((ans) => {
+      const module = ans.module_type || 'reading';
+      if (answersByModule[module]) {
+        answersByModule[module].answers.push(ans);
+        answersByModule[module].total++;
+        if (ans.is_correct) answersByModule[module].correct++;
+      }
+    });
+
+    // Fetch writing responses
+    const { rows: writingResponses } = await pool.query(
+      `SELECT wr.*, es.title AS section_title
+      FROM writing_responses wr
+      LEFT JOIN exam_sections es ON wr.section_id = es.id
+      WHERE wr.submission_id = $1
+      ORDER BY wr.task_number`,
+      [submissionId]
+    );
+
+    const finalWritingResponses = writingResponses.map((wr) => {
+      let aiFeedback = {};
+      try {
+        aiFeedback = typeof wr.ai_feedback === 'string'
+          ? JSON.parse(wr.ai_feedback)
+          : (wr.ai_feedback || {});
+      } catch {}
+      return { ...wr, ai_feedback: aiFeedback };
+    });
+
+    // Calculate bands
+    const writingBands = finalWritingResponses
+      .map((wr) => pickWritingBand(wr))
+      .filter((value) => value != null);
+    const writingChecked = writingBands.length > 0;
+    const writingBand = writingChecked
+      ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+      : null;
+
+    const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
+    const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
+    const overallBand = writingChecked
+      ? roundHalf((listeningBand + readingBand + writingBand) / 3)
+      : null;
+
+    const fullSubmissionData = {
+      ...submission,
+      band_score: overallBand,
+      overall_band_score: overallBand,
+      scores_by_module: {
+        ...(submission.scores_by_module || {}),
+        listening: listeningBand,
+        reading: readingBand,
+        writing: writingChecked ? writingBand : null,
+      },
+      writing_checked: writingChecked,
+      user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
+      user_email: submission.user_email,
+      exam_title: submission.exam_title,
+      answers_by_module: answersByModule,
+      writing_responses: finalWritingResponses,
+    };
+
+    // Generate PDF
+    const pdfFilename = generatePDFFilename(fullSubmissionData);
+    const tempDir = path.join(__dirname, '..', 'uploads', 'temp');
+    
+    // Create temp directory if it doesn't exist
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const pdfPath = path.join(tempDir, pdfFilename);
+
+    console.log(`📄 Generating PDF for submission ${submissionId}...`);
+    await generateSubmissionPDF(fullSubmissionData, pdfPath);
+
+    console.log(`📧 Sending PDF to ${submission.user_email}...`);
+    await sendSubmissionPDF(
+      submission.user_email,
+      fullSubmissionData,
+      pdfPath,
+      pdfFilename
+    );
+
+    // Clean up temporary PDF file
+    fs.unlinkSync(pdfPath);
+    console.log(`🗑️ Cleaned up temporary PDF file`);
+
+    res.json({
+      success: true,
+      message: `Results PDF sent to ${submission.user_email}`,
+      email: submission.user_email,
+    });
+  } catch (error) {
+    console.error('Failed to generate/email PDF:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate or email PDF' });
+  }
+};
