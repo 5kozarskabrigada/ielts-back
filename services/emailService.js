@@ -16,7 +16,15 @@ const createTransporter = () => {
     return null;
   }
 
-  return nodemailer.createTransport({
+  console.log("📧 Creating email transporter with config:", {
+    host: EMAIL_HOST,
+    port: EMAIL_PORT,
+    user: EMAIL_USER,
+    secure: EMAIL_SECURE,
+    requireTLS: true
+  });
+
+  return nodemailer.createTransporter({
     host: EMAIL_HOST,
     port: EMAIL_PORT,
     secure: EMAIL_SECURE, // false for port 587 (STARTTLS)
@@ -210,11 +218,23 @@ If you need any assistance, please contact your administrator.
   };
 
   try {
+    console.log(`📤 Attempting to send welcome email to: ${toEmail}`);
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Welcome email sent to ${toEmail} (Message ID: ${info.messageId})`);
+    console.log(`✅ Welcome email sent successfully!`);
+    console.log(`   → To: ${toEmail}`);
+    console.log(`   → Message ID: ${info.messageId}`);
+    console.log(`   → Response: ${info.response}`);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error(`❌ Failed to send email to ${toEmail}:`, error.message);
+    console.error(`\n❌ FAILED to send welcome email`);
+    console.error(`   → Recipient: ${toEmail}`);
+    console.error(`   → Error Type: ${error.name}`);
+    console.error(`   → Error Message: ${error.message}`);
+    if (error.code) console.error(`   → Error Code: ${error.code}`);
+    if (error.response) console.error(`   → SMTP Response: ${error.response}`);
+    if (error.responseCode) console.error(`   → Response Code: ${error.responseCode}`);
+    if (error.command) console.error(`   → Failed Command: ${error.command}`);
+    console.error(`   → Full Error:`, error);
     throw error;
   }
 };
@@ -392,11 +412,23 @@ If you need any assistance, please contact your administrator.
   };
 
   try {
+    console.log(`📤 Attempting to send submission PDF email to: ${toEmail}`);
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Submission PDF email sent to ${toEmail} (Message ID: ${info.messageId})`);
+    console.log(`✅ Submission PDF email sent successfully!`);
+    console.log(`   → To: ${toEmail}`);
+    console.log(`   → Message ID: ${info.messageId}`);
+    console.log(`   → Response: ${info.response}`);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error(`❌ Failed to send submission PDF to ${toEmail}:`, error.message);
+    console.error(`\n❌ FAILED to send submission PDF email`);
+    console.error(`   → Recipient: ${toEmail}`);
+    console.error(`   → Error Type: ${error.name}`);
+    console.error(`   → Error Message: ${error.message}`);
+    if (error.code) console.error(`   → Error Code: ${error.code}`);
+    if (error.response) console.error(`   → SMTP Response: ${error.response}`);
+    if (error.responseCode) console.error(`   → Response Code: ${error.responseCode}`);
+    if (error.command) console.error(`   → Failed Command: ${error.command}`);
+    console.error(`   → Full Error:`, error);
     throw error;
   }
 };
