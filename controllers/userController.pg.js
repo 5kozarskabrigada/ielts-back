@@ -51,14 +51,19 @@ export const createUser = async (req, res) => {
     // Send email if requested and email is valid (not a placeholder)
     if (sendEmail && email && email.trim() && !email.includes("@placeholder.local")) {
       try {
-        await sendWelcomeEmail(email, {
+        const emailResult = await sendWelcomeEmail(email, {
           firstName,
           lastName,
           username,
           password: rawPassword,
         });
-        emailSent = true;
-        console.log(`✅ Welcome email sent to ${email} for user ${username}`);
+        
+        if (emailResult && emailResult.success) {
+          emailSent = true;
+          console.log(`✅ Welcome email sent to ${email} for user ${username}`);
+        } else {
+          console.warn(`⚠️ Email not sent to ${email}: ${emailResult?.message || 'Email service not configured'}`);
+        }
       } catch (emailError) {
         console.error(`❌ Failed to send welcome email to ${email}:`, emailError.message);
         // Don't fail user creation if email fails
