@@ -695,8 +695,7 @@ export const emailSubmissionPDF = async (req, res) => {
         u.last_name, 
         u.email AS user_email,
         e.id AS exam_id_ref,
-        e.title AS exam_title,
-        e.time_limit
+        e.title AS exam_title
       FROM exam_submissions es
       LEFT JOIN users u ON es.user_id = u.id
       LEFT JOIN exams e ON es.exam_id = e.id

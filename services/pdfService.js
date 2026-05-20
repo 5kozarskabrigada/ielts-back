@@ -163,7 +163,22 @@ export const generateSubmissionPDF = async (submissionData, outputPath) => {
            .fillColor('#000')
            .text(submittedDate, 120, y + 40);
 
-        return y + 70;
+        // Calculate and display overall band score
+        const overallBandScore = submissionData.band_score;
+        if (overallBandScore != null) {
+          doc.font('Helvetica')
+             .fillColor(grayColor)
+             .text('Overall Band:', 50, y + 60);
+          
+          doc.font('Helvetica-Bold')
+             .fillColor(primaryColor)
+             .fontSize(12)
+             .text(Number(overallBandScore).toFixed(1), 120, y + 60);
+          
+          doc.fontSize(10);
+        }
+
+        return y + 90;
       };
 
       const getBandColor = (band) => {
@@ -219,7 +234,6 @@ export const generateSubmissionPDF = async (submissionData, outputPath) => {
         let xPos = 50;
 
         const cards = [
-          { label: 'Overall Band', value: overallBand, color: getBandColor(overallBand) },
           { label: 'Listening', value: listeningBand, color: getBandColor(listeningBand) },
           { label: 'Reading', value: readingBand, color: getBandColor(readingBand) },
           { label: 'Writing', value: writingBand, color: getBandColor(writingBand) },
