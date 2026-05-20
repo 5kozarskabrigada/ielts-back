@@ -24,7 +24,7 @@ const createTransporter = () => {
     requireTLS: true
   });
 
-  return nodemailer.createTransporter({
+  return nodemailer.createTransport({
     host: EMAIL_HOST,
     port: EMAIL_PORT,
     secure: EMAIL_SECURE, // false for port 587 (STARTTLS)
