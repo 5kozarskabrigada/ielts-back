@@ -767,14 +767,23 @@ export const emailSubmissionPDF = async (req, res) => {
       return { ...wr, ai_feedback: aiFeedback };
     });
 
-    // Calculate bands
-    const writingBands = finalWritingResponses
-      .map((wr) => pickWritingBand(wr))
-      .filter((value) => value != null);
-    const writingChecked = writingBands.length > 0;
-    const writingBand = writingChecked
-      ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
-      : null;
+    // Calculate bands (match submission details logic, including manual writing override)
+    const manualWritingBand = submission.writing_band_score ? parseFloat(submission.writing_band_score) : null;
+    let writingBand = null;
+    let writingChecked = false;
+
+    if (manualWritingBand !== null) {
+      writingBand = manualWritingBand;
+      writingChecked = true;
+    } else {
+      const writingBands = finalWritingResponses
+        .map((wr) => pickWritingBand(wr))
+        .filter((value) => value != null);
+      writingChecked = writingBands.length > 0;
+      writingBand = writingChecked
+        ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+        : null;
+    }
 
     const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
     const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
@@ -804,6 +813,7 @@ export const emailSubmissionPDF = async (req, res) => {
       },
       speaking_band_score: speakingBand,
       writing_checked: writingChecked,
+      writing_band_score: writingBand,
       user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
       user_email: submission.user_email,
       exam_title: submission.exam_title,
@@ -811,8 +821,7 @@ export const emailSubmissionPDF = async (req, res) => {
       writing_responses: finalWritingResponses,
     };
 
-    // Generate PDF
-    const pdfFilename = generatePDFFilename(fullSubmissionData);
+    // Generate or use provided PDF (when admin emails exact downloaded PDF)
     const tempDir = path.join(__dirname, '..', 'uploads', 'temp');
     
     // Create temp directory if it doesn't exist
@@ -820,10 +829,19 @@ export const emailSubmissionPDF = async (req, res) => {
       fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    const pdfPath = path.join(tempDir, pdfFilename);
+    let pdfFilename = generatePDFFilename(fullSubmissionData);
+    let pdfPath = path.join(tempDir, pdfFilename);
 
-    console.log(`📄 Generating PDF for submission ${submissionId}...`);
-    await generateSubmissionPDF(fullSubmissionData, pdfPath);
+    if (req.file?.buffer && req.file.buffer.length > 0) {
+      const safeOriginalName = (req.file.originalname || pdfFilename).replace(/[^a-zA-Z0-9._-]/g, '_');
+      pdfFilename = safeOriginalName;
+      pdfPath = path.join(tempDir, `${Date.now()}_${safeOriginalName}`);
+      fs.writeFileSync(pdfPath, req.file.buffer);
+      console.log(`📄 Using uploaded PDF attachment for submission ${submissionId}...`);
+    } else {
+      console.log(`📄 Generating PDF for submission ${submissionId}...`);
+      await generateSubmissionPDF(fullSubmissionData, pdfPath);
+    }
 
     console.log(`📧 Sending PDF to ${submission.user_email}...`);
     const emailResult = await sendSubmissionPDF(
@@ -834,8 +852,10 @@ export const emailSubmissionPDF = async (req, res) => {
     );
 
     // Clean up temporary PDF file
-    fs.unlinkSync(pdfPath);
-    console.log(`🗑️ Cleaned up temporary PDF file`);
+    if (fs.existsSync(pdfPath)) {
+      fs.unlinkSync(pdfPath);
+      console.log(`🗑️ Cleaned up temporary PDF file`);
+    }
 
     // Check if email was actually sent
     if (!emailResult || emailResult.success === false) {
