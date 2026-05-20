@@ -778,9 +778,18 @@ export const emailSubmissionPDF = async (req, res) => {
 
     const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
     const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
-    const overallBand = writingChecked
-      ? roundHalf((listeningBand + readingBand + writingBand) / 3)
-      : null;
+    const speakingBand = submission.speaking_band_score ? parseFloat(submission.speaking_band_score) : null;
+    
+    // Calculate overall band including speaking if available
+    let overallBand = null;
+    if (writingChecked) {
+      const modules = [listeningBand, readingBand, writingBand];
+      if (speakingBand !== null) {
+        modules.push(speakingBand);
+      }
+      const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+      overallBand = roundHalf(average);
+    }
 
     const fullSubmissionData = {
       ...submission,
@@ -791,7 +800,9 @@ export const emailSubmissionPDF = async (req, res) => {
         listening: listeningBand,
         reading: readingBand,
         writing: writingChecked ? writingBand : null,
+        speaking: speakingBand,
       },
+      speaking_band_score: speakingBand,
       writing_checked: writingChecked,
       user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
       user_email: submission.user_email,
