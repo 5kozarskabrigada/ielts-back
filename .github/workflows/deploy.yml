@@ -17,12 +17,13 @@ jobs:
           EMAIL_PORT: ${{ secrets.EMAIL_PORT }}
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: JWT_SECRET,DATABASE_URL,EMAIL_HOST,EMAIL_PORT,EMAIL_USER,EMAIL_PASSWORD,GROQ_API_KEY
+          envs: JWT_SECRET,DATABASE_URL,EMAIL_HOST,EMAIL_PORT,EMAIL_USER,EMAIL_PASSWORD,EMAIL_FROM,GROQ_API_KEY
           script: |
             set -e
             
@@ -49,6 +50,7 @@ jobs:
             echo "EMAIL_PORT=${EMAIL_PORT}" >> .env
             echo "EMAIL_USER=${EMAIL_USER}" >> .env
             echo "EMAIL_PASSWORD=${EMAIL_PASSWORD}" >> .env
+            echo "EMAIL_FROM=${EMAIL_FROM}" >> .env
             echo "EMAIL_SECURE=false" >> .env
             echo "PLATFORM_NAME=ExamRoom" >> .env
             echo "" >> .env

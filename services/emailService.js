@@ -5,6 +5,7 @@ const EMAIL_HOST = process.env.EMAIL_HOST || "smtp.office365.com";
 const EMAIL_PORT = parseInt(process.env.EMAIL_PORT || "587", 10);
 const EMAIL_USER = process.env.EMAIL_USER || "info@examroomedu.com";
 const EMAIL_PASSWORD = process.env.EMAIL_PASSWORD || "";
+const EMAIL_FROM = process.env.EMAIL_FROM || process.env.EMAIL_USER || "info@examroomedu.com"; // Separate from auth user
 const EMAIL_SECURE = process.env.EMAIL_SECURE === "true"; // true for 465, false for 587
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const PLATFORM_NAME = process.env.PLATFORM_NAME || "ExamRoom";
@@ -191,7 +192,7 @@ export const sendWelcomeEmail = async (toEmail, userData) => {
   }
 
   const mailOptions = {
-    from: `"${PLATFORM_NAME}" <${EMAIL_USER}>`,
+    from: `"${PLATFORM_NAME}" <${EMAIL_FROM}>`,
     to: toEmail,
     subject: `Welcome to ${PLATFORM_NAME} - Your Login Credentials`,
     html: generateCredentialsEmail(userData),
@@ -398,7 +399,7 @@ If you need any assistance, please contact your administrator.
   `.trim();
 
   const mailOptions = {
-    from: `"${PLATFORM_NAME}" <${EMAIL_USER}>`,
+    from: `"${PLATFORM_NAME}" <${EMAIL_FROM}>`,
     to: toEmail,
     subject: `Your ${examTitle} Results - ${PLATFORM_NAME}`,
     html: htmlContent,
