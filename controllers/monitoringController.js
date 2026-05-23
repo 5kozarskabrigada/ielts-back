@@ -451,10 +451,12 @@ export const getSubmissionDetails = async (req, res) => {
       .select(`
         *,
         questions (
-          id,
+           id,
           question_number,
           question_type,
           question_text,
+          question_template,
+          label_text,
           correct_answer,
           question_data,
           exam_sections (
@@ -481,6 +483,8 @@ export const getSubmissionDetails = async (req, res) => {
         question_number: ans.questions.question_number,
         question_type: ans.questions.question_type,
         question_text: ans.questions.question_text || '',
+        question_template: ans.questions.question_template || null,
+        label_text: ans.questions.label_text || null,
         user_answer: ans.user_answer,
         correct_answer: ans.questions.correct_answer,
         is_correct: ans.is_correct,
@@ -592,6 +596,8 @@ export const getSubmissionDetails = async (req, res) => {
               question_number: qNum,
               question_type: group.question_type,
               question_text: `${group.question_type.replace(/_/g, ' ')} item ${qNum}`,
+              question_template: group.summary_data?.text || group.template_text || null,
+              label_text: null,
               user_answer: userAnswer,
               correct_answer: correctAnswer,
               is_correct: isCorrect,
