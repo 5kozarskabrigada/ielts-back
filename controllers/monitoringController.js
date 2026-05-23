@@ -1,4 +1,4 @@
-import { supabase } from "../supabaseClient.js";
+import { pool } from "../db.js";
 
 const LISTENING_BAND_TABLE = [
   { min: 39, max: 40, band: 9.0 },
@@ -79,104 +79,65 @@ export const logViolation = async (req, res) => {
   }
 
   try {
-    const { data, error } = await supabase
-      .from("violations")
-      .insert([
-        {
-          user_id: userId,
-          exam_id: examId,
-          violation_type: type,
-          metadata: metadata || {},
-          occurred_at: new Date(),
-        },
-      ])
-      .select()
-      .single();
+    const { rows } = await pool.query(
+      `INSERT INTO violations (user_id, exam_id, violation_type, metadata, occurred_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       RETURNING *`,
+      [userId, examId, type, JSON.stringify(metadata || {})]
+    );
 
-    if (error) throw error;
-    res.status(201).json(data);
+    res.status(201).json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
 
-// Get all logs for admin
 export const getAllLogs = async (req, res) => {
   try {
-    // Fetch from monitoring_logs table
-    const { data: logs, error: logsError } = await supabase
-      .from('monitoring_logs')
-      .select(`
-        *,
-        users:user_id (
-          id,
-          first_name,
-          last_name,
-          email
-        ),
-        exams:exam_id (
-          id,
-          title,
-          modules_config
-        )
-      `)
-      .order('timestamp', { ascending: false });
+    const { rows: logs } = await pool.query(
+      `SELECT ml.*,
+              u.id AS user_id_ref, u.first_name, u.last_name, u.email AS user_email,
+              e.id AS exam_id_ref, e.title AS exam_title
+       FROM monitoring_logs ml
+       LEFT JOIN users u ON u.id = ml.user_id
+       LEFT JOIN exams e ON e.id = ml.exam_id
+       ORDER BY ml.timestamp DESC`
+    );
 
-    if (logsError) {
-      console.error('Supabase error fetching logs:', logsError);
-      throw logsError;
-    }
+    const { rows: violations } = await pool.query(
+      `SELECT v.*,
+              u.id AS user_id_ref, u.first_name, u.last_name, u.email AS user_email,
+              e.id AS exam_id_ref, e.title AS exam_title
+       FROM violations v
+       LEFT JOIN users u ON u.id = v.user_id
+       LEFT JOIN exams e ON e.id = v.exam_id
+       ORDER BY v.occurred_at DESC`
+    );
 
-    // Fetch from violations table
-    const { data: violations, error: violationsError } = await supabase
-      .from('violations')
-      .select(`
-        *,
-        users:user_id (
-          id,
-          first_name,
-          last_name,
-          email
-        ),
-        exams:exam_id (
-          id,
-          title
-        )
-      `)
-      .order('occurred_at', { ascending: false });
-
-    if (violationsError) {
-      console.error('Supabase error fetching violations:', violationsError);
-      // Don't throw, just log and continue with empty violations
-    }
-
-    // Format monitoring_logs
-    const formattedLogs = (logs || []).map(log => ({
+    const formattedLogs = logs.map(log => ({
       id: log.id,
       event_type: log.event_type,
       timestamp: log.timestamp,
       metadata: log.metadata,
       user_id: log.user_id,
-      user_name: log.users ? `${log.users.first_name} ${log.users.last_name}`.trim() : 'Unknown',
-      user_email: log.users?.email,
+      user_name: `${log.first_name || ''} ${log.last_name || ''}`.trim() || 'Unknown',
+      user_email: log.user_email,
       exam_id: log.exam_id,
-      exam_title: log.exams?.title
+      exam_title: log.exam_title
     }));
 
-    // Format violations as logs
-    const formattedViolations = (violations || []).map(violation => ({
-      id: violation.id,
-      event_type: violation.violation_type, // Use violation_type as event_type
-      timestamp: violation.occurred_at, // Map occurred_at to timestamp for consistency
-      metadata: violation.metadata,
-      user_id: violation.user_id,
-      user_name: violation.users ? `${violation.users.first_name} ${violation.users.last_name}`.trim() : 'Unknown',
-      user_email: violation.users?.email,
-      exam_id: violation.exam_id,
-      exam_title: violation.exams?.title
+    const formattedViolations = violations.map(v => ({
+      id: v.id,
+      event_type: v.violation_type,
+      timestamp: v.occurred_at,
+      metadata: v.metadata,
+      user_id: v.user_id,
+      user_name: `${v.first_name || ''} ${v.last_name || ''}`.trim() || 'Unknown',
+      user_email: v.user_email,
+      exam_id: v.exam_id,
+      exam_title: v.exam_title
     }));
 
-    // Combine both arrays and sort by timestamp
     const allLogs = [...formattedLogs, ...formattedViolations]
       .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
@@ -187,39 +148,28 @@ export const getAllLogs = async (req, res) => {
   }
 };
 
-// Get logs for a specific exam
 export const getExamLogs = async (req, res) => {
   try {
     const { examId } = req.params;
 
-    const { data: logs, error } = await supabase
-      .from('monitoring_logs')
-      .select(`
-        *,
-        users:user_id (
-          id,
-          first_name,
-          last_name,
-          email
-        )
-      `)
-      .eq('exam_id', examId)
-      .order('timestamp', { ascending: false });
+    const { rows: logs } = await pool.query(
+      `SELECT ml.*,
+              u.first_name, u.last_name, u.email AS user_email
+       FROM monitoring_logs ml
+       LEFT JOIN users u ON u.id = ml.user_id
+       WHERE ml.exam_id = $1
+       ORDER BY ml.timestamp DESC`,
+      [examId]
+    );
 
-    if (error) {
-      console.error('Supabase error fetching exam logs:', error);
-      throw error;
-    }
-
-    // Format the response
-    const formattedLogs = (logs || []).map(log => ({
+    const formattedLogs = logs.map(log => ({
       id: log.id,
       event_type: log.event_type,
       timestamp: log.timestamp,
       metadata: log.metadata,
       user_id: log.user_id,
-      user_name: log.users ? `${log.users.first_name} ${log.users.last_name}`.trim() : 'Unknown',
-      user_email: log.users?.email
+      user_name: `${log.first_name || ''} ${log.last_name || ''}`.trim() || 'Unknown',
+      user_email: log.user_email
     }));
 
     res.json(formattedLogs);
@@ -229,110 +179,78 @@ export const getExamLogs = async (req, res) => {
   }
 };
 
-// Get all submissions for admin
 export const getAllSubmissions = async (req, res) => {
   try {
-    const { data: submissions, error } = await supabase
-      .from('exam_submissions')
-      .select(`
-        *,
-        users:user_id (
-          id,
-          first_name,
-          last_name,
-          email
-        ),
-        exams:exam_id (
-          id,
-          title
-        )
-      `)
-      .order('submitted_at', { ascending: false });
+    const { rows: submissions } = await pool.query(
+      `SELECT es.*,
+              u.id AS u_id, u.first_name, u.last_name, u.email AS user_email,
+              e.id AS e_id, e.title AS exam_title
+       FROM exam_submissions es
+       LEFT JOIN users u ON u.id = es.user_id
+       LEFT JOIN exams e ON e.id = es.exam_id
+       ORDER BY es.submitted_at DESC`
+    );
 
-    if (error) {
-      console.error('Supabase error fetching submissions:', error);
-      throw error;
-    }
+    const totalSubmissions = submissions.length;
 
-    // Handle potentially null data
-    const submissionsArray = submissions || [];
-
-    const submissionIds = submissionsArray.map((s) => s.id).filter(Boolean);
+    const submissionIds = submissions.map((s) => s.id).filter(Boolean);
     const correctBySubmissionAndModule = {};
     const writingBySubmission = {};
 
     if (submissionIds.length > 0) {
-      const { data: answerRows, error: answerError } = await supabase
-        .from('answers')
-        .select(`
-          submission_id,
-          is_correct,
-          admin_override_correct,
-          questions!inner(
-            exam_sections!inner(
-              module_type
-            )
-          )
-        `)
-        .in('submission_id', submissionIds);
+      const { rows: answerRows } = await pool.query(
+        `SELECT a.submission_id,
+                COALESCE(a.admin_override_correct, a.is_correct) AS effective_correct,
+                s.module_type
+         FROM answers a
+         LEFT JOIN questions q ON q.id = a.question_id
+         LEFT JOIN exam_sections s ON s.id = q.section_id
+         WHERE a.submission_id = ANY($1::uuid[])`,
+        [submissionIds]
+      );
 
-      if (answerError) {
-        console.error('Supabase error fetching answer correctness for submissions:', answerError);
-      } else {
-        (answerRows || []).forEach((row) => {
-          const submissionId = row.submission_id;
-          const moduleType = row.questions?.exam_sections?.module_type;
-          if (!submissionId || (moduleType !== 'listening' && moduleType !== 'reading' && moduleType !== 'writing')) {
-            return;
-          }
+      (answerRows || []).forEach((row) => {
+        const submissionId = row.submission_id;
+        const moduleType = row.module_type;
+        if (!submissionId || (moduleType !== 'listening' && moduleType !== 'reading' && moduleType !== 'writing')) {
+          return;
+        }
 
-          if (!correctBySubmissionAndModule[submissionId]) {
-            correctBySubmissionAndModule[submissionId] = { listening: 0, reading: 0, writing: 0 };
-          }
+        if (!correctBySubmissionAndModule[submissionId]) {
+          correctBySubmissionAndModule[submissionId] = { listening: 0, reading: 0, writing: 0 };
+        }
 
-          const effectiveCorrect = row.admin_override_correct !== null && row.admin_override_correct !== undefined
-            ? row.admin_override_correct
-            : row.is_correct;
+        if (row.effective_correct === true) {
+          correctBySubmissionAndModule[submissionId][moduleType] += 1;
+        }
+      });
 
-          if (effectiveCorrect === true) {
-            correctBySubmissionAndModule[submissionId][moduleType] += 1;
-          }
-        });
-      }
+      const { rows: writingRows } = await pool.query(
+        `SELECT submission_id, admin_override_band, final_band, ai_overall_band
+         FROM writing_responses
+         WHERE submission_id = ANY($1::uuid[])`,
+        [submissionIds]
+      );
 
-      const { data: writingRows, error: writingError } = await supabase
-        .from('writing_responses')
-        .select('submission_id, admin_override_band, final_band, ai_overall_band')
-        .in('submission_id', submissionIds);
-
-      if (writingError) {
-        console.error('Supabase error fetching writing bands for submissions:', writingError);
-      } else {
-        (writingRows || []).forEach((row) => {
-          const submissionId = row.submission_id;
-          if (!submissionId) return;
-          if (!writingBySubmission[submissionId]) {
-            writingBySubmission[submissionId] = [];
-          }
-          const band = pickWritingBand(row);
-          if (band != null) {
-            writingBySubmission[submissionId].push(band);
-          }
-        });
-      }
+      (writingRows || []).forEach((row) => {
+        const submissionId = row.submission_id;
+        if (!submissionId) return;
+        if (!writingBySubmission[submissionId]) {
+          writingBySubmission[submissionId] = [];
+        }
+        const band = pickWritingBand(row);
+        if (band != null) {
+          writingBySubmission[submissionId].push(band);
+        }
+      });
     }
-
-    // Calculate stats
-    const totalSubmissions = submissionsArray.length;
     
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-    const thisWeekCount = submissionsArray.filter(s => new Date(s.submitted_at) > oneWeekAgo).length;
+    const thisWeekCount = submissions.filter(s => new Date(s.submitted_at) > oneWeekAgo).length;
+    const activeExams = new Set(submissions.map(s => s.exam_id)).size;
 
-    const activeExams = new Set(submissionsArray.map(s => s.exam_id)).size;
-
-    // Format submissions
-    const formattedSubmissions = submissionsArray.map((sub) => {
+    const formattedSubmissions = submissions.map(sub => {
       const moduleCorrect = correctBySubmissionAndModule[sub.id] || { listening: 0, reading: 0, writing: 0 };
       const listeningBand = getBandFromCorrect(moduleCorrect.listening, LISTENING_BAND_TABLE);
       const readingBand = getBandFromCorrect(moduleCorrect.reading, ACADEMIC_READING_BAND_TABLE);
@@ -352,10 +270,10 @@ export const getAllSubmissions = async (req, res) => {
       return {
         id: sub.id,
         user_id: sub.user_id,
-        user_name: sub.users ? `${sub.users.first_name} ${sub.users.last_name}`.trim() : 'Unknown',
-        user_email: sub.users?.email,
+        user_name: `${sub.first_name || ''} ${sub.last_name || ''}`.trim() || 'Unknown',
+        user_email: sub.user_email,
         exam_id: sub.exam_id,
-        exam_title: sub.exams?.title,
+        exam_title: sub.exam_title,
         submitted_at: sub.submitted_at,
         band_score: computedOverallBand,
         scores_by_module: {
@@ -383,12 +301,7 @@ export const getAllSubmissions = async (req, res) => {
       : 0;
 
     res.json({
-      stats: {
-        total: totalSubmissions,
-        avgBandScore,
-        thisWeek: thisWeekCount,
-        activeExams
-      },
+      stats: { total: totalSubmissions, avgBandScore, thisWeek: thisWeekCount, activeExams },
       submissions: formattedSubmissions
     });
   } catch (error) {
@@ -397,115 +310,163 @@ export const getAllSubmissions = async (req, res) => {
   }
 };
 
-// Get detailed submission by ID
 export const getSubmissionDetails = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data: submission, error } = await supabase
-      .from('exam_submissions')
-      .select(`
-        *,
-        users:user_id (
-          id,
-          first_name,
-          last_name,
-          email
-        ),
-        exams:exam_id (
-          id,
-          title
-        )
-      `)
-      .eq('id', id)
-      .single();
+    const { rows: subRows } = await pool.query(
+      `SELECT es.*,
+              u.first_name, u.last_name, u.email AS user_email,
+              e.title AS exam_title, e.modules_config
+       FROM exam_submissions es
+       LEFT JOIN users u ON u.id = es.user_id
+       LEFT JOIN exams e ON e.id = es.exam_id
+       WHERE es.id = $1`,
+      [id]
+    );
 
-    if (error) {
-      console.error('Supabase error fetching submission details:', error);
-      throw error;
-    }
+    if (subRows.length === 0) return res.status(404).json({ error: 'Submission not found' });
+    const submission = subRows[0];
 
-    if (!submission) {
-      return res.status(404).json({ error: 'Submission not found' });
-    }
+    const { rows: logs } = await pool.query(
+      `SELECT * FROM monitoring_logs WHERE exam_id = $1 AND user_id = $2 ORDER BY timestamp DESC`,
+      [submission.exam_id, submission.user_id]
+    );
 
-    // Get associated logs for this submission
-    const { data: logs } = await supabase
-      .from('monitoring_logs')
-      .select('*')
-      .eq('exam_id', submission.exam_id)
-      .eq('user_id', submission.user_id)
-      .order('timestamp', { ascending: false });
+    const { rows: violations } = await pool.query(
+      `SELECT * FROM violations WHERE exam_id = $1 AND user_id = $2 ORDER BY occurred_at DESC`,
+      [submission.exam_id, submission.user_id]
+    );
 
-    // Get violations for this submission
-    const { data: violations } = await supabase
-      .from('violations')
-      .select('*')
-      .eq('exam_id', submission.exam_id)
-      .eq('user_id', submission.user_id)
-      .order('occurred_at', { ascending: false });
+    const { rows: answers } = await pool.query(
+      `SELECT a.*,
+              q.id AS q_id, q.question_number, q.question_type, q.question_text,
+              q.correct_answer, q.question_data, q.question_template, q.label_text,
+              s.id AS section_id, s.title AS section_title, s.module_type, s.section_order
+       FROM answers a
+       LEFT JOIN questions q ON q.id = a.question_id
+       LEFT JOIN exam_sections s ON s.id = q.section_id
+       WHERE a.submission_id = $1
+       ORDER BY a.created_at ASC`,
+      [id]
+    );
 
-    // Get detailed answers with question and section information
-    const { data: answers, error: answersError } = await supabase
-      .from('answers')
-      .select(`
-        *,
-        questions (
-           id,
-          question_number,
-          question_type,
-          question_text,
-          question_template,
-          label_text,
-          correct_answer,
-          question_data,
-          exam_sections (
-            id,
-            title,
-            module_type,
-            section_order
-          )
-        )
-      `)
-      .eq('submission_id', id)
-      .order('created_at', { ascending: true });
-
-    if (answersError) {
-      console.error('Error fetching answers:', answersError);
-    }
-
-    // Format answer details for frontend
-    const answerDetails = (answers || [])
-      .filter(ans => ans.questions) // Skip if question was deleted and join returned null
+    const answerDetails = answers
+      .filter(ans => ans.q_id)
       .map(ans => ({
         question_id: ans.question_id,
-        section_id: ans.questions.exam_sections?.id || null,
-        question_number: ans.questions.question_number,
-        question_type: ans.questions.question_type,
-        question_text: ans.questions.question_text || '',
-        question_template: ans.questions.question_template || null,
-        label_text: ans.questions.label_text || null,
+        section_id: ans.section_id || null,
+        question_number: ans.question_number,
+        question_type: ans.question_type,
+        question_text: ans.question_text || '',
+        question_template: ans.question_template || '',
+        label_text: ans.label_text || '',
         user_answer: ans.user_answer,
-        correct_answer: ans.questions.correct_answer,
+        correct_answer: ans.correct_answer,
         is_correct: ans.is_correct,
         score: ans.score,
-        module_type: ans.questions.exam_sections?.module_type || 'unknown',
-        section_title: ans.questions.exam_sections?.title || 'Unknown',
-        section_order: ans.questions.exam_sections?.section_order || 0,
-        options: ans.questions.question_data || {}
+        module_type: ans.module_type || 'unknown',
+        section_title: ans.section_title || 'Unknown',
+        section_order: ans.section_order || 0,
+        options: ans.question_data || {}
       }))
       .sort((a, b) => {
-        // Sort by module order (listening first, then reading, then writing)
         const moduleOrder = { listening: 0, reading: 1, writing: 2 };
         const moduleDiff = (moduleOrder[a.module_type] || 99) - (moduleOrder[b.module_type] || 99);
         if (moduleDiff !== 0) return moduleDiff;
-        // Then by section order
         if (a.section_order !== b.section_order) return a.section_order - b.section_order;
-        // Then by question number
         return a.question_number - b.question_number;
       });
 
-    // Group answers by module with correct/wrong counts
+    // -------------------------------------------------------
+    // Enrich answers from modules_config when DB fields are null
+    // Covers: table_completion (cells), map_labeling, diagram_labeling
+    // -------------------------------------------------------
+    {
+      const allConfigGroups = [
+        ...(submission.modules_config?.listening_question_groups || []),
+        ...(submission.modules_config?.reading_question_groups || [])
+      ];
+
+      // Build a map: sectionId_questionNumber -> group
+      const groupByQNum = new Map();
+      allConfigGroups.forEach(group => {
+        const start = Number(group.question_range_start || 0);
+        const end = Number(group.question_range_end || 0);
+        for (let q = start; q <= end; q++) {
+          groupByQNum.set(`${group.section_id}_${q}`, group);
+        }
+      });
+
+      answerDetails.forEach(ans => {
+        const group = groupByQNum.get(`${ans.section_id}_${ans.question_number}`);
+        if (!group) return;
+
+        // ── table_completion ──────────────────────────────────────
+        if (ans.question_type === 'table_completion') {
+          const tableData = group.table_data;
+          if (tableData && Array.isArray(tableData.cells)) {
+            const start = Number(group.question_range_start || 0);
+            const targetBlank = ans.question_number - start; // 0-based index
+            let blanksSeen = 0;
+            let found = false;
+
+            for (let r = 0; r < tableData.cells.length && !found; r++) {
+              const row = tableData.cells[r];
+              if (!Array.isArray(row)) continue;
+              for (let c = 0; c < row.length && !found; c++) {
+                const cellContent = String(row[c] || '');
+                const blanksInCell = (cellContent.match(/\[BLANK\]/g) || []).length;
+                if (blanksSeen + blanksInCell > targetBlank) {
+                  // This cell holds our blank
+                  if (!ans.question_template) {
+                    ans.question_template = cellContent;
+                  }
+                  if (!ans.label_text) {
+                    // Use first non-blank column of this row as the label
+                    const firstColContent = String(row[0] || '').replace(/\[BLANK\]/g, '').trim();
+                    if (firstColContent && c !== 0) {
+                      ans.label_text = firstColContent;
+                    } else if (tableData.headers && tableData.headers[c]) {
+                      // Fall back to column header
+                      ans.label_text = String(tableData.headers[c] || '');
+                    }
+                  }
+                  found = true;
+                }
+                blanksSeen += blanksInCell;
+              }
+            }
+          }
+        }
+
+        // ── map_labeling / diagram_labeling ───────────────────────
+        if (ans.question_type === 'map_labeling' || ans.question_type === 'diagram_labeling') {
+          // question_text is the per-question label from the questions table.
+          // If it's a generic placeholder, replace it with the group image_description.
+          const isGeneric = !ans.question_text ||
+            /^(map|diagram)\s+(labeling|blank|completion)\s+\w+/i.test(ans.question_text.trim()) ||
+            /^(map|diagram|short_answer|sentence_completion)\s+item\s+\d+/i.test(ans.question_text.trim());
+          if (isGeneric && group.image_description) {
+            ans.question_text = group.image_description;
+          }
+          // Attach image_url to options so frontend can show context
+          if (group.image_url && !ans.options?.image_url) {
+            ans.options = { ...(ans.options || {}), image_url: group.image_url, image_description: group.image_description || '' };
+          }
+        }
+
+        // ── form_completion / note_completion ─────────────────────
+        if ((ans.question_type === 'form_completion' || ans.question_type === 'note_completion') && !ans.question_template) {
+          // These store template in the questions table; if missing, try instruction_text as context
+          if (group.instruction_text) {
+            ans.question_text = ans.question_text || group.instruction_text;
+          }
+        }
+      });
+    }
+    // ── end enrichment ────────────────────────────────────────────
+
     const answersByModule = {
       listening: { correct: 0, wrong: 0, skipped: 0, answers: [] },
       reading: { correct: 0, wrong: 0, skipped: 0, answers: [] },
@@ -515,13 +476,9 @@ export const getSubmissionDetails = async (req, res) => {
     answerDetails.forEach(ans => {
       if (answersByModule[ans.module_type]) {
         answersByModule[ans.module_type].answers.push(ans);
-        if (ans.is_correct === true) {
-          answersByModule[ans.module_type].correct++;
-        } else if (ans.is_correct === false) {
-          answersByModule[ans.module_type].wrong++;
-        } else {
-          answersByModule[ans.module_type].skipped++;
-        }
+        if (ans.is_correct === true) answersByModule[ans.module_type].correct++;
+        else if (ans.is_correct === false) answersByModule[ans.module_type].wrong++;
+        else answersByModule[ans.module_type].skipped++;
       }
     });
 
@@ -530,8 +487,8 @@ export const getSubmissionDetails = async (req, res) => {
     const rawSubmissionAnswers = submission.answers;
     if (rawSubmissionAnswers && typeof rawSubmissionAnswers === 'object') {
       const allGroups = [
-        ...(submission.exams?.modules_config?.listening_question_groups || []),
-        ...(submission.exams?.modules_config?.reading_question_groups || [])
+        ...(submission.modules_config?.listening_question_groups || []),
+        ...(submission.modules_config?.reading_question_groups || [])
       ];
 
       const recoverableTypes = new Set([
@@ -545,13 +502,13 @@ export const getSubmissionDetails = async (req, res) => {
       ]);
 
       if (allGroups.length > 0) {
-        const { data: examSections } = await supabase
-          .from('exam_sections')
-          .select('id, module_type, title, section_order')
-          .eq('exam_id', submission.exam_id);
+        const { rows: examSections } = await pool.query(
+          `SELECT id, module_type, title, section_order FROM exam_sections WHERE exam_id = $1`,
+          [submission.exam_id]
+        );
 
         const sectionMap = {};
-        (examSections || []).forEach((s) => { sectionMap[s.id] = s; });
+        examSections.forEach((s) => { sectionMap[s.id] = s; });
 
         for (const group of allGroups) {
           if (!group || !recoverableTypes.has(group.question_type)) continue;
@@ -564,7 +521,6 @@ export const getSubmissionDetails = async (req, res) => {
 
           for (let qNum = start; qNum <= end; qNum++) {
             const blankIndex = qNum - start;
-
             const keyCandidates = [
               `summary_placeholder_${group.id}_${blankIndex}`,
               `table_${group.id}_blank_${blankIndex}`
@@ -572,14 +528,14 @@ export const getSubmissionDetails = async (req, res) => {
 
             const answerKey = keyCandidates.find((k) => Object.prototype.hasOwnProperty.call(rawSubmissionAnswers, k)) || null;
             const userAnswer = answerKey ? rawSubmissionAnswers[answerKey] : null;
-
             const correctAnswer = group.question_type === 'summary_completion'
               ? (group.summary_data?.answers?.[blankIndex] || '')
               : '';
 
             const alreadyExists = answerDetails.some((a) =>
               Number(a.question_number) === Number(qNum) &&
-              (a.section_id ? a.section_id === group.section_id : a.section_order === (section.section_order || 0))
+              a.section_id === group.section_id &&
+              a.module_type === moduleType
             );
             if (alreadyExists) continue;
 
@@ -596,8 +552,6 @@ export const getSubmissionDetails = async (req, res) => {
               question_number: qNum,
               question_type: group.question_type,
               question_text: `${group.question_type.replace(/_/g, ' ')} item ${qNum}`,
-              question_template: group.summary_data?.text || group.template_text || null,
-              label_text: null,
               user_answer: userAnswer,
               correct_answer: correctAnswer,
               is_correct: isCorrect,
@@ -618,6 +572,35 @@ export const getSubmissionDetails = async (req, res) => {
           }
         }
 
+        // Final deduplication: Remove any duplicate question numbers within the same section/module
+        const seen = new Map();
+        const dedupedAnswers = [];
+        for (const ans of answerDetails) {
+          const key = `${ans.module_type}_${ans.section_id || ans.section_order}_${ans.question_number}`;
+          if (!seen.has(key)) {
+            seen.set(key, true);
+            dedupedAnswers.push(ans);
+          }
+        }
+
+        // Replace answerDetails with deduplicated version
+        answerDetails.length = 0;
+        answerDetails.push(...dedupedAnswers);
+
+        // Recalculate answersByModule counts after deduplication
+        answersByModule.listening = { correct: 0, wrong: 0, skipped: 0, answers: [] };
+        answersByModule.reading = { correct: 0, wrong: 0, skipped: 0, answers: [] };
+        answersByModule.writing = { correct: 0, wrong: 0, skipped: 0, answers: [] };
+
+        answerDetails.forEach(ans => {
+          if (answersByModule[ans.module_type]) {
+            answersByModule[ans.module_type].answers.push(ans);
+            if (ans.is_correct === true) answersByModule[ans.module_type].correct++;
+            else if (ans.is_correct === false) answersByModule[ans.module_type].wrong++;
+            else answersByModule[ans.module_type].skipped++;
+          }
+        });
+
         answerDetails.sort((a, b) => {
           const moduleOrder = { listening: 0, reading: 1, writing: 2 };
           const moduleDiff = (moduleOrder[a.module_type] || 99) - (moduleOrder[b.module_type] || 99);
@@ -628,50 +611,44 @@ export const getSubmissionDetails = async (req, res) => {
       }
     }
 
-    // Get writing responses for this submission
-    const { data: writingResponses } = await supabase
-      .from('writing_responses')
-      .select('*')
-      .eq('submission_id', id)
-      .order('task_number', { ascending: true });
+    // Writing responses
+    const { rows: writingResponses } = await pool.query(
+      `SELECT * FROM writing_responses WHERE submission_id = $1 ORDER BY task_number ASC`,
+      [id]
+    );
 
-    // Always check raw answers to fill in any missing tasks
     let rawAnswers = null;
     if (submission.answers && typeof submission.answers === 'object' && Object.keys(submission.answers).length > 0) {
       rawAnswers = submission.answers;
     } else {
-      // Check autosaves table as fallback
-      const { data: autosave } = await supabase
-        .from('exam_autosaves')
-        .select('answers_data')
-        .eq('exam_id', submission.exam_id)
-        .eq('user_id', submission.user_id)
-        .order('last_updated', { ascending: false })
-        .limit(1)
-        .single();
-      if (autosave?.answers_data) {
-        rawAnswers = typeof autosave.answers_data === 'string' ? JSON.parse(autosave.answers_data) : autosave.answers_data;
+      const { rows: autosaveRows } = await pool.query(
+        `SELECT answers_data FROM exam_autosaves
+         WHERE exam_id = $1 AND user_id = $2
+         ORDER BY last_updated DESC LIMIT 1`,
+        [submission.exam_id, submission.user_id]
+      );
+      if (autosaveRows[0]?.answers_data) {
+        rawAnswers = typeof autosaveRows[0].answers_data === 'string'
+          ? JSON.parse(autosaveRows[0].answers_data)
+          : autosaveRows[0].answers_data;
       }
     }
 
-    // Get writing sections for context
-    const { data: writingSections } = await supabase
-      .from('exam_sections')
-      .select('id, section_order, title, task_config')
-      .eq('exam_id', submission.exam_id)
-      .eq('module_type', 'writing')
-      .order('section_order', { ascending: true });
+    const { rows: writingSections } = await pool.query(
+      `SELECT id, section_order, title, task_config
+       FROM exam_sections
+       WHERE exam_id = $1 AND module_type = 'writing'
+       ORDER BY section_order ASC`,
+      [submission.exam_id]
+    );
 
-    // Build complete list: start with DB records, add missing tasks from raw answers or sections
     const finalWritingResponses = [];
-    const existingTaskNumbers = new Set((writingResponses || []).map(wr => wr.task_number));
-    
-    // Add all DB records first
-    if (writingResponses && writingResponses.length > 0) {
+    const existingTaskNumbers = new Set(writingResponses.map(wr => wr.task_number));
+
+    if (writingResponses.length > 0) {
       finalWritingResponses.push(...writingResponses);
     }
 
-    // Check for missing tasks in raw answers
     if (rawAnswers && typeof rawAnswers === 'object') {
       const writingKeys = Object.keys(rawAnswers).filter(k => k.startsWith('writing_task_'));
       for (const key of writingKeys) {
@@ -687,21 +664,15 @@ export const getSubmissionDetails = async (req, res) => {
             response_text: essayText,
             word_count: essayText.trim() ? essayText.trim().split(/\s+/).length : 0,
             section_title: section?.title || `Writing Task ${taskNumber}`,
-            ai_overall_band: null,
-            ai_task_response_score: null,
-            ai_coherence_score: null,
-            ai_lexical_score: null,
-            ai_grammar_score: null,
-            ai_feedback: null,
-            admin_override_band: null,
-            admin_feedback: null,
+            ai_overall_band: null, ai_task_response_score: null,
+            ai_coherence_score: null, ai_lexical_score: null, ai_grammar_score: null,
+            ai_feedback: null, admin_override_band: null, admin_feedback: null,
           });
           existingTaskNumbers.add(taskNumber);
         }
       }
     }
 
-    // Ensure all writing sections are represented (even if empty)
     if (writingSections && writingSections.length > 0) {
       for (let i = 0; i < writingSections.length; i++) {
         const taskNumber = i + 1;
@@ -709,41 +680,54 @@ export const getSubmissionDetails = async (req, res) => {
           const section = writingSections[i];
           finalWritingResponses.push({
             id: `empty-${taskNumber}`,
-            submission_id: id,
-            section_id: section?.id || null,
-            task_number: taskNumber,
-            response_text: '',
-            word_count: 0,
+            submission_id: id, section_id: section?.id || null,
+            task_number: taskNumber, response_text: '', word_count: 0,
             section_title: section?.title || `Writing Task ${taskNumber}`,
-            ai_overall_band: null,
-            ai_task_response_score: null,
-            ai_coherence_score: null,
-            ai_lexical_score: null,
-            ai_grammar_score: null,
-            ai_feedback: null,
-            admin_override_band: null,
-            admin_feedback: null,
+            ai_overall_band: null, ai_task_response_score: null,
+            ai_coherence_score: null, ai_lexical_score: null, ai_grammar_score: null,
+            ai_feedback: null, admin_override_band: null, admin_feedback: null,
           });
         }
       }
     }
 
-    // Sort by task number
     finalWritingResponses.sort((a, b) => a.task_number - b.task_number);
 
-    const writingBands = finalWritingResponses
-      .map((wr) => pickWritingBand(wr))
-      .filter((value) => value != null);
-    const writingChecked = writingBands.length > 0;
-    const writingBand = writingChecked
-      ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
-      : null;
+    // Check for manual writing band score override first
+    const manualWritingBand = submission.writing_band_score ? parseFloat(submission.writing_band_score) : null;
+    
+    let writingBand = null;
+    let writingChecked = false;
+    
+    if (manualWritingBand !== null) {
+      // Teacher/admin has manually overridden the writing band
+      writingBand = manualWritingBand;
+      writingChecked = true;
+    } else {
+      // Calculate from AI/admin graded tasks
+      const writingBands = finalWritingResponses
+        .map((wr) => pickWritingBand(wr))
+        .filter((value) => value != null);
+      writingChecked = writingBands.length > 0;
+      writingBand = writingChecked
+        ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+        : null;
+    }
 
     const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
     const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
-    const overallBand = writingChecked
-      ? roundHalf((listeningBand + readingBand + writingBand) / 3)
-      : null;
+    const speakingBand = submission.speaking_band_score ? parseFloat(submission.speaking_band_score) : null;
+    
+    // Calculate overall band including speaking if available
+    let overallBand = null;
+    if (writingChecked) {
+      const modules = [listeningBand, readingBand, writingBand];
+      if (speakingBand !== null) {
+        modules.push(speakingBand);
+      }
+      const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+      overallBand = roundHalf(average);
+    }
 
     res.json({
       ...submission,
@@ -754,11 +738,14 @@ export const getSubmissionDetails = async (req, res) => {
         listening: listeningBand,
         reading: readingBand,
         writing: writingChecked ? writingBand : null,
+        speaking: speakingBand,
       },
+      speaking_band_score: speakingBand,
+      writing_band_score: manualWritingBand,
       writing_checked: writingChecked,
-      user_name: submission.users ? `${submission.users.first_name} ${submission.users.last_name}`.trim() : 'Unknown',
-      user_email: submission.users?.email,
-      exam_title: submission.exams?.title,
+      user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
+      user_email: submission.user_email,
+      exam_title: submission.exam_title,
       answers: answerDetails,
       answers_by_module: answersByModule,
       writing_responses: finalWritingResponses,
@@ -768,5 +755,428 @@ export const getSubmissionDetails = async (req, res) => {
   } catch (error) {
     console.error('Failed to fetch submission details:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch submission details' });
+  }
+};
+
+/**
+ * Generate PDF and email submission results to student
+ */
+export const emailSubmissionPDF = async (req, res) => {
+  const { id: submissionId } = req.params;
+
+  try {
+    // Import services (dynamic import to avoid circular dependencies)
+    const { generateSubmissionPDF, generatePDFFilename } = await import('../services/pdfService.js');
+    const { sendSubmissionPDF } = await import('../services/emailService.js');
+    const fs = await import('fs');
+    const path = await import('path');
+    const { fileURLToPath } = await import('url');
+
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    // Fetch full submission data (reusing logic from getSubmissionDetails)
+    const { rows: subRows } = await pool.query(
+      `SELECT 
+        es.*,
+        u.id AS user_id_ref,
+        u.first_name, 
+        u.last_name, 
+        u.email AS user_email,
+        e.id AS exam_id_ref,
+        e.title AS exam_title
+      FROM exam_submissions es
+      LEFT JOIN users u ON es.user_id = u.id
+      LEFT JOIN exams e ON es.exam_id = e.id
+      WHERE es.id = $1`,
+      [submissionId]
+    );
+
+    if (subRows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    const submission = subRows[0];
+
+    if (!submission.user_email) {
+      return res.status(400).json({ error: 'Student email not found' });
+    }
+
+    // Fetch answers
+    const { rows: answerDetails } = await pool.query(
+      `SELECT 
+        a.*,
+        q.question_number,
+        q.question_text,
+        q.question_type,
+        q.correct_answer,
+        es.module_type,
+        es.title AS section_title
+      FROM answers a
+      LEFT JOIN questions q ON a.question_id = q.id
+      LEFT JOIN exam_sections es ON q.section_id = es.id
+      WHERE a.submission_id = $1
+      ORDER BY q.question_number`,
+      [submissionId]
+    );
+
+    // Group answers by module
+    const answersByModule = {
+      listening: { answers: [], correct: 0, total: 0 },
+      reading: { answers: [], correct: 0, total: 0 },
+      writing: { answers: [], correct: 0, total: 0 },
+    };
+
+    answerDetails.forEach((ans) => {
+      const module = ans.module_type || 'reading';
+      if (answersByModule[module]) {
+        answersByModule[module].answers.push(ans);
+        answersByModule[module].total++;
+        if (ans.is_correct) answersByModule[module].correct++;
+      }
+    });
+
+    // Fetch writing responses
+    const { rows: writingResponses } = await pool.query(
+      `SELECT wr.*, es.title AS section_title
+      FROM writing_responses wr
+      LEFT JOIN exam_sections es ON wr.section_id = es.id
+      WHERE wr.submission_id = $1
+      ORDER BY wr.task_number`,
+      [submissionId]
+    );
+
+    const finalWritingResponses = writingResponses.map((wr) => {
+      let aiFeedback = {};
+      try {
+        aiFeedback = typeof wr.ai_feedback === 'string'
+          ? JSON.parse(wr.ai_feedback)
+          : (wr.ai_feedback || {});
+      } catch {}
+      return { ...wr, ai_feedback: aiFeedback };
+    });
+
+    // Calculate bands (match submission details logic, including manual writing override)
+    const manualWritingBand = submission.writing_band_score ? parseFloat(submission.writing_band_score) : null;
+    let writingBand = null;
+    let writingChecked = false;
+
+    if (manualWritingBand !== null) {
+      writingBand = manualWritingBand;
+      writingChecked = true;
+    } else {
+      const writingBands = finalWritingResponses
+        .map((wr) => pickWritingBand(wr))
+        .filter((value) => value != null);
+      writingChecked = writingBands.length > 0;
+      writingBand = writingChecked
+        ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+        : null;
+    }
+
+    const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
+    const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
+    const speakingBand = submission.speaking_band_score ? parseFloat(submission.speaking_band_score) : null;
+    
+    // Calculate overall band including speaking if available
+    let overallBand = null;
+    if (writingChecked) {
+      const modules = [listeningBand, readingBand, writingBand];
+      if (speakingBand !== null) {
+        modules.push(speakingBand);
+      }
+      const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+      overallBand = roundHalf(average);
+    }
+
+    const fullSubmissionData = {
+      ...submission,
+      band_score: overallBand,
+      overall_band_score: overallBand,
+      scores_by_module: {
+        ...(submission.scores_by_module || {}),
+        listening: listeningBand,
+        reading: readingBand,
+        writing: writingChecked ? writingBand : null,
+        speaking: speakingBand,
+      },
+      speaking_band_score: speakingBand,
+      writing_checked: writingChecked,
+      writing_band_score: writingBand,
+      user_name: `${submission.first_name || ''} ${submission.last_name || ''}`.trim() || 'Unknown',
+      user_email: submission.user_email,
+      exam_title: submission.exam_title,
+      answers_by_module: answersByModule,
+      writing_responses: finalWritingResponses,
+    };
+
+    // Generate or use provided PDF (when admin emails exact downloaded PDF)
+    const tempDir = path.join(__dirname, '..', 'uploads', 'temp');
+    
+    // Create temp directory if it doesn't exist
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    let pdfFilename = generatePDFFilename(fullSubmissionData);
+    let pdfPath = path.join(tempDir, pdfFilename);
+
+    if (req.file?.buffer && req.file.buffer.length > 0) {
+      const safeOriginalName = (req.file.originalname || pdfFilename).replace(/[^a-zA-Z0-9._-]/g, '_');
+      pdfFilename = safeOriginalName;
+      pdfPath = path.join(tempDir, `${Date.now()}_${safeOriginalName}`);
+      fs.writeFileSync(pdfPath, req.file.buffer);
+      console.log(`📄 Using uploaded PDF attachment for submission ${submissionId}...`);
+    } else {
+      console.log(`📄 Generating PDF for submission ${submissionId}...`);
+      await generateSubmissionPDF(fullSubmissionData, pdfPath);
+    }
+
+    console.log(`📧 Sending PDF to ${submission.user_email}...`);
+    const emailResult = await sendSubmissionPDF(
+      submission.user_email,
+      fullSubmissionData,
+      pdfPath,
+      pdfFilename
+    );
+
+    // Clean up temporary PDF file
+    if (fs.existsSync(pdfPath)) {
+      fs.unlinkSync(pdfPath);
+      console.log(`🗑️ Cleaned up temporary PDF file`);
+    }
+
+    // Check if email was actually sent
+    if (!emailResult || emailResult.success === false) {
+      return res.status(503).json({ 
+        error: 'Email service not configured',
+        message: emailResult?.message || 'Email sending failed. Please contact administrator.',
+        details: 'EMAIL_PASSWORD environment variable is not set on the server.'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Results PDF sent to ${submission.user_email}`,
+      email: submission.user_email,
+    });
+  } catch (error) {
+    console.error('Failed to generate/email PDF:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate or email PDF' });
+  }
+};
+
+/**
+ * Update speaking band score for a submission
+ */
+export const updateSpeakingScore = async (req, res) => {
+  const { id: submissionId } = req.params;
+  const { speaking_band_score } = req.body;
+
+  // Validate speaking score
+  if (speaking_band_score === null || speaking_band_score === undefined) {
+    return res.status(400).json({ error: 'Speaking band score is required' });
+  }
+
+  const score = parseFloat(speaking_band_score);
+  if (isNaN(score) || score < 0 || score > 9) {
+    return res.status(400).json({ error: 'Speaking band score must be between 0 and 9' });
+  }
+
+  try {
+    // Update the speaking score
+    const { rows } = await pool.query(
+      `UPDATE exam_submissions 
+       SET speaking_band_score = $1
+       WHERE id = $2
+       RETURNING id, speaking_band_score`,
+      [score, submissionId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    // Recalculate overall band score including speaking
+    const { rows: subRows } = await pool.query(
+      `SELECT 
+        es.*,
+        e.id AS exam_id_ref
+      FROM exam_submissions es
+      LEFT JOIN exams e ON es.exam_id = e.id
+      WHERE es.id = $1`,
+      [submissionId]
+    );
+
+    const submission = subRows[0];
+
+    // Get module scores
+    const answersByModule = {
+      listening: { correct: 0 },
+      reading: { correct: 0 }
+    };
+
+    const { rows: answerRows } = await pool.query(
+      `SELECT q.module_type, a.is_correct
+       FROM answers a
+       JOIN questions q ON a.question_id = q.id
+       WHERE a.submission_id = $1`,
+      [submissionId]
+    );
+
+    answerRows.forEach(a => {
+      const mod = a.module_type;
+      if (mod === 'listening' || mod === 'reading') {
+        answersByModule[mod].correct += (a.is_correct ? 1 : 0);
+      }
+    });
+
+    const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
+    const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
+
+    // Get writing band
+    const { rows: writingRows } = await pool.query(
+      `SELECT admin_override_band, final_band, ai_overall_band
+       FROM writing_responses
+       WHERE submission_id = $1`,
+      [submissionId]
+    );
+
+    const writingBands = writingRows.map(pickWritingBand).filter(b => b !== null);
+    const writingBand = writingBands.length > 0
+      ? writingBands.reduce((sum, value) => sum + value, 0) / writingBands.length
+      : null;
+
+    const writingChecked = submission.writing_grading_status === 'complete' || 
+                          submission.writing_grading_status === 'admin_reviewed';
+
+    // Calculate overall band including speaking if available
+    let overallBand = null;
+    if (writingChecked && writingBand !== null) {
+      const modules = [listeningBand, readingBand, writingBand];
+      if (score !== null) {
+        modules.push(score); // Include speaking
+      }
+      const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+      overallBand = roundHalf(average);
+    }
+
+    // Update overall band score
+    await pool.query(
+      `UPDATE exam_submissions 
+       SET band_score = $1, overall_band_score = $1
+       WHERE id = $2`,
+      [overallBand, submissionId]
+    );
+
+    res.json({ 
+      success: true, 
+      speaking_band_score: score,
+      band_score: overallBand,
+      message: 'Speaking score updated successfully'
+    });
+  } catch (error) {
+    console.error('Failed to update speaking score:', error);
+    res.status(500).json({ error: error.message || 'Failed to update speaking score' });
+  }
+};
+
+export const updateWritingScore = async (req, res) => {
+  const { id: submissionId } = req.params;
+  const { writing_band_score } = req.body;
+
+  // Validate writing score
+  if (writing_band_score === null || writing_band_score === undefined) {
+    return res.status(400).json({ error: 'Writing band score is required' });
+  }
+
+  const score = parseFloat(writing_band_score);
+  if (isNaN(score) || score < 0 || score > 9) {
+    return res.status(400).json({ error: 'Writing band score must be between 0 and 9' });
+  }
+
+  try {
+    // Update the writing score
+    const { rows } = await pool.query(
+      `UPDATE exam_submissions 
+       SET writing_band_score = $1
+       WHERE id = $2
+       RETURNING id, writing_band_score`,
+      [score, submissionId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    // Recalculate overall band score including writing
+    const { rows: subRows } = await pool.query(
+      `SELECT 
+        es.*,
+        e.id AS exam_id_ref
+      FROM exam_submissions es
+      LEFT JOIN exams e ON es.exam_id = e.id
+      WHERE es.id = $1`,
+      [submissionId]
+    );
+
+    const submission = subRows[0];
+
+    // Get module scores
+    const answersByModule = {
+      listening: { correct: 0 },
+      reading: { correct: 0 }
+    };
+
+    const { rows: answerRows } = await pool.query(
+      `SELECT q.module_type, a.is_correct
+       FROM answers a
+       JOIN questions q ON a.question_id = q.id
+       WHERE a.submission_id = $1`,
+      [submissionId]
+    );
+
+    answerRows.forEach(a => {
+      const mod = a.module_type;
+      if (mod === 'listening' || mod === 'reading') {
+        answersByModule[mod].correct += (a.is_correct ? 1 : 0);
+      }
+    });
+
+    const listeningBand = getBandFromCorrect(answersByModule.listening.correct, LISTENING_BAND_TABLE);
+    const readingBand = getBandFromCorrect(answersByModule.reading.correct, ACADEMIC_READING_BAND_TABLE);
+
+    // Get speaking band
+    const speakingBand = submission.speaking_band_score ? parseFloat(submission.speaking_band_score) : null;
+
+    // Calculate overall band including writing manual override
+    let overallBand = null;
+    const modules = [listeningBand, readingBand];
+    if (score !== null) {
+      modules.push(score); // Include manual writing score
+    }
+    if (speakingBand !== null) {
+      modules.push(speakingBand); // Include speaking if available
+    }
+    const average = modules.reduce((sum, val) => sum + val, 0) / modules.length;
+    overallBand = roundHalf(average);
+
+    // Update overall band score
+    await pool.query(
+      `UPDATE exam_submissions 
+       SET band_score = $1, overall_band_score = $1
+       WHERE id = $2`,
+      [overallBand, submissionId]
+    );
+
+    res.json({ 
+      success: true, 
+      writing_band_score: score,
+      band_score: overallBand,
+      message: 'Writing score updated successfully'
+    });
+  } catch (error) {
+    console.error('Failed to update writing score:', error);
+    res.status(500).json({ error: error.message || 'Failed to update writing score' });
   }
 };
