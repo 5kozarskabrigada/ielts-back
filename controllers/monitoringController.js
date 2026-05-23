@@ -442,19 +442,43 @@ export const getSubmissionDetails = async (req, res) => {
 
         // ── map_labeling / diagram_labeling ───────────────────────
         if (ans.question_type === 'map_labeling' || ans.question_type === 'diagram_labeling') {
-          // question_text is the per-question label from the questions table.
-          // If it's a generic placeholder, replace it with the group image_description.
-          const isGeneric = !ans.question_text ||
-            /^(map|diagram)\s+(labeling|blank|completion)\s+\w+/i.test(ans.question_text.trim()) ||
-            /^(map|diagram|short_answer|sentence_completion)\s+item\s+\d+/i.test(ans.question_text.trim());
-          if (isGeneric && group.image_description) {
-            ans.question_text = group.image_description;
-          }
-          // Attach image_url to options so frontend can show context
-          if (group.image_url && !ans.options?.image_url) {
-            ans.options = { ...(ans.options || {}), image_url: group.image_url, image_description: group.image_description || '' };
-          }
-        }
+  const isGeneric = !ans.question_text ||
+    /^(map|diagram)\s+(labeling|blank|completion)\s+\w+/i.test(ans.question_text.trim()) ||
+    /^(map|diagram|short_answer|sentence_completion)\s+item\s+\d+/i.test(ans.question_text.trim());
+
+  if (isGeneric) {
+    // 1. Try label from question_data (stored per-question label)
+    const qData = ans.options || {};
+    const labelFromData = qData.label || qData.point_label || qData.location_label || qData.text;
+    if (labelFromData && String(labelFromData).trim()) {
+      ans.question_text = String(labelFromData).trim();
+    }
+    // 2. Try labels array from the group by blank index
+    else if (Array.isArray(group.labels)) {
+      const blankIndex = ans.question_number - Number(group.question_range_start || 0);
+      const label = group.labels[blankIndex];
+      if (label && String(label).trim()) {
+        ans.question_text = String(label).trim();
+      }
+    }
+    // 3. Try points/markers array
+    else if (Array.isArray(group.points || group.markers)) {
+      const arr = group.points || group.markers;
+      const blankIndex = ans.question_number - Number(group.question_range_start || 0);
+      const point = arr[blankIndex];
+      const pointLabel = point?.label || point?.text || point?.name;
+      if (pointLabel) ans.question_text = String(pointLabel).trim();
+    }
+    // 4. Fall back to image_description (existing behavior)
+    else if (group.image_description) {
+      ans.question_text = group.image_description;
+    }
+  }
+
+  if (group.image_url && !ans.options?.image_url) {
+    ans.options = { ...(ans.options || {}), image_url: group.image_url, image_description: group.image_description || '' };
+  }
+}
 
         // ── form_completion / note_completion ─────────────────────
         if ((ans.question_type === 'form_completion' || ans.question_type === 'note_completion') && !ans.question_template) {
